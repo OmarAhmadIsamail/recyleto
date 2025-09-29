@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Pharmacy Registration Needs Approval</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #f39c12; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .footer { padding: 20px; text-align: center; font-size: 12px; color: #666; }
+        .button { display: inline-block; padding: 10px 20px; background-color: #3498db; color: white; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>New Pharmacy Registration</h1>
+        </div>
+        <div class="content">
+            <h2>Hello Admin,</h2>
+            <p>A new pharmacy has registered and requires approval:</p>
+            
+            <p><strong>Pharmacy Name:</strong> <%= pharmacyName %></p>
+            <p><strong>Email:</strong> <%= email %></p>
+            <p><strong>Business Phone:</strong> <%= businessPhone %></p>
+            <p><strong>Registration Date:</strong> <%= registrationDate %></p>
+            
+            <p>Please review this registration in the admin panel:</p>
+            
+            <p style="text-align: center;">
+                <a href="<%= adminUrl %>" class="button">Review Registration</a>
+            </p>
+        </div>
+        <div class="footer">
+            <p>© 2023 Recyleto Admin System</p>
+        </div>
+    </div>
+</body>
+</html>

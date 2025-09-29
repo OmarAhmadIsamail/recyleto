@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Reset Request</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333333;
+            margin: 0;
+            padding: 0;
+            background-color: #f7f7f7;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+        }
+        .header {
+            background-color: #ace1df;
+            padding: 20px;
+            text-align: center;
+        }
+        .logo {
+            color: #ffffff;
+            font-size: 24px;
+            font-weight: bold;
+            text-decoration: none;
+        }
+        .content {
+            padding: 30px;
+        }
+        .code-box {
+            background-color: #f8f8f8;
+            border-left: 4px solid #ace1df;
+            padding: 15px;
+            margin: 25px 0;
+            text-align: center;
+            font-size: 32px;
+            font-weight: bold;
+            letter-spacing: 5px;
+            color: #333333;
+        }
+        .footer {
+            background-color: #f1f1f1;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666666;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #ace1df;
+            color: #ffffff;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-top: 15px;
+        }
+        .support {
+            margin-top: 25px;
+            padding-top: 25px;
+            border-top: 1px solid #eeeeee;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="#" class="logo">RECYLETO</a>
+        </div>
+        
+        <div class="content">
+            <h2>Password Reset Request</h2>
+            <p>Hello,</p>
+            <p>We received a request to reset your password for your Recyleto account. Use the verification code below to proceed with resetting your password.</p>
+            
+            <div class="code-box">
+                <%= code %>  <!-- FIXED: Changed from resetCode to code -->
+            </div>
+            
+            <p>This code will expire in <strong>10 minutes</strong> for security reasons.</p>
+            <p>If you didn't request this password reset, please ignore this email or contact support if you have concerns.</p>
+            
+            <div class="support">
+                <p>Need help? Contact our support team at <a href="mailto:support@recyleto.com">support@recyleto.com</a></p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>&copy; 2023 Recyleto. All rights reserved.</p>
+            <p><a href="#">Privacy Policy</a> | <a href="#">Terms of Service</a></p>
+        </div>
+    </div>
+</body>
+</html>

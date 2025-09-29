@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Recyleto</title>
+    <style>
+        /* Base styles */
+        body {
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        .container {
+            max-width: 100%;
+            width: 100%;
+            margin: 0 auto;
+            background: #ffffff;
+        }
+        
+        /* Header */
+        .header {
+            background-color: #ace1df;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            color: #2c3e50;
+            margin: 10px 0 0;
+            font-size: 16px;
+            opacity: 0.9;
+        }
+        
+        /* Content */
+        .content {
+            padding: 30px 20px;
+            color: #4a5568;
+        }
+        
+        .welcome-text {
+            font-size: 18px;
+            line-height: 1.6;
+            margin-bottom: 25px;
+            color: #4a5568;
+        }
+        
+        .features-section {
+            background-color: #f8fafc;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 30px 0;
+            border-left: 4px solid #ace1df;
+        }
+        
+        .section-title {
+            text-align: center;
+            color: #2c3e50;
+            margin-top: 0;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 25px;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+        
+        .feature-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+        }
+        
+        .feature-number {
+            color: #2c3e50;
+            font-weight: bold;
+            font-size: 20px;
+            min-width: 25px;
+        }
+        
+        .feature-content h4 {
+            margin: 0 0 8px;
+            color: #2c3e50;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .feature-content p {
+            margin: 0;
+            font-size: 15px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+        
+        .account-info {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 30px 0;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .account-info h3 {
+            color: #2c3e50;
+            margin-top: 0;
+            font-size: 18px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        
+        .info-label {
+            font-weight: 500;
+            color: #64748b;
+        }
+        
+        .info-value {
+            font-weight: 600;
+            color: #2c3e50;
+            text-align: right;
+        }
+        
+        .next-steps {
+            margin: 30px 0;
+        }
+        
+        .next-steps h3 {
+            color: #2c3e50;
+            font-size: 18px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .steps-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .steps-list li {
+            padding: 12px 0 12px 30px;
+            position: relative;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        
+        .steps-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #10b981;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        .support-section {
+            text-align: center;
+            padding: 25px 20px;
+            background: #f8fafc;
+            border-radius: 12px;
+            margin: 30px 0;
+        }
+        
+        .support-section h3 {
+            color: #2c3e50;
+            margin-top: 0;
+        }
+        
+        .support-contact {
+            font-size: 16px;
+            color: #4a5568;
+            margin: 10px 0;
+        }
+        
+        /* Footer */
+        .footer {
+            background: #ace1df;
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        .footer-text {
+            font-size: 14px;
+            opacity: 0.8;
+            margin: 10px 0;
+            color: #2c3e50;
+        }
+        
+        /* Responsive */
+        @media (min-width: 600px) {
+            .container {
+                max-width: 600px;
+                margin: 20px auto;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Welcome to Recyleto!</h1>
+            <p>Your Complete Pharmacy Management Solution</p>
+        </div>
+        
+        <!-- Content -->
+        <div class="content">
+            <div class="welcome-text">
+                <p>Hello <strong><%= typeof pharmacyName !== 'undefined' ? pharmacyName : 'Valued Customer' %></strong>,</p>
+                <p>Welcome to the Recyleto family! We're thrilled to have you on board. Your account was successfully created on <strong><%= typeof currentDate !== 'undefined' ? currentDate : new Date().toLocaleDateString() %></strong>.</p>
+            </div>
+            
+            <!-- Account Information -->
+            <div class="account-info">
+                <h3>Your Account Details</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Pharmacy Name:</span>
+                        <span class="info-value"><%= typeof pharmacyName !== 'undefined' ? pharmacyName : 'Not provided' %></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Email:</span>
+                        <span class="info-value"><%= typeof email !== 'undefined' ? email : 'Not provided' %></span>
+                    </div>
+                    <% if (typeof businessAddress !== 'undefined' && businessAddress) { %>
+                    <div class="info-item">
+                        <span class="info-label">Address:</span>
+                        <span class="info-value">
+                            <%= businessAddress.street || '' %>, <%= businessAddress.city || '' %><br>
+                            <%= businessAddress.state || '' %> <%= businessAddress.zipCode || '' %>
+                        </span>
+                    </div>
+                    <% } %>
+                    <div class="info-item">
+                        <span class="info-label">Account Type:</span>
+                        <span class="info-value">Pharmacy</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Status:</span>
+                        <span class="info-value" style="color: #10b981;">Active ✓</span>
+                    </div>
+                </div>
+            </div>
+            
+           
+            
+            <!-- Next Steps -->
+            <div class="next-steps">
+                <h3>Getting Started</h3>
+                <ul class="steps-list">
+                    <li>Complete your pharmacy profile information</li>
+                    <li>Add your medicine inventory and set up categories</li>
+                    <li>Configure your staff accounts and permissions</li>
+                    <li>Set up your notification preferences</li>
+
+                </ul>
+            </div>
+            
+            <!-- Support Section -->
+            <div class="support-section">
+                <h3>Need Help?</h3>
+                <p class="support-contact">Our support team is here for you<br>
+                Email: support@recyleto.com<br>
+                Phone: +1 (800) 123-4567</p>
+                <p>Business Hours: Monday-Friday, 9AM-6PM EST</p>
+            </div>
+            
+            <p style="text-align: center; margin-top: 30px; color: #64748b;">
+                We're excited to help you transform your pharmacy management!
+            </p>
+            
+            <p style="text-align: center; color: #64748b; margin-top: 30px;">
+                Best regards,<br>
+                <strong>The Recyleto Team</strong>
+            </p>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <p class="footer-text">© 2024 Recyleto. All rights reserved.</p>
+            <p class="footer-text">You're receiving this email because you registered for a Recyleto account.</p>
+        </div>
+    </div>
+</body>
+</html>

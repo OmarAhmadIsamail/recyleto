@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Receipt - <%= receipt.receiptNumber %></title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+    .header { text-align: center; margin-bottom: 20px; }
+    .transaction-info { margin-bottom: 20px; }
+    .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    .table th { background-color: #f2f2f2; }
+    .summary { margin-bottom: 20px; }
+    .footer { margin-top: 30px; text-align: center; font-size: 12px; }
+    .qr-code { text-align: center; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Recyleto Pharmacy</h1>
+    <h2>Receipt: <%= receipt.receiptNumber %></h2>
+  </div>
+
+  <div class="transaction-info">
+    <p><strong>Transaction Reference:</strong> <%= transaction.transactionRef %></p>
+    <p><strong>Date:</strong> <%= formatDate(transaction.createdAt) %></p>
+    <% if (transaction.customerInfo && transaction.customerInfo.name) { %>
+      <p><strong>Customer:</strong> <%= transaction.customerInfo.name %></p>
+    <% } %>
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Medicine</th>
+        <th>Generic Name</th>
+        <th>Form</th>
+        <th>Qty</th>
+        <th>Unit Price</th>
+        <th>Total</th>
+        <th>Expiry Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% medicineBreakdown.forEach(item => { %>
+        <tr>
+          <td><%= item.name %></td>
+          <td><%= item.genericName %></td>
+          <td><%= item.form %></td>
+          <td><%= item.quantity %></td>
+          <td><%= formatCurrency(item.unitPrice) %></td>
+          <td><%= formatCurrency(item.lineTotal) %></td>
+          <td><%= formatDate(item.expiryDate) %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+
+  <div class="summary">
+    <p><strong>Subtotal:</strong> <%= formatCurrency(transaction.subtotal) %></p>
+    <p><strong>Tax:</strong> <%= formatCurrency(transaction.tax) %></p>
+    <p><strong>Discount:</strong> <%= formatCurrency(transaction.discount) %></p>
+    <p><strong>Total:</strong> <%= formatCurrency(transaction.total) %></p>
+    <p><strong>Payment Method:</strong> <%= transaction.paymentMethod %></p>
+  </div>
+
+  <% if (transaction.notes) { %>
+    <div class="notes">
+      <p><strong>Notes:</strong> <%= transaction.notes %></p>
+    </div>
+  <% } %>
+
+  <div class="qr-code">
+    <img src="<%= qrCodeImage %>" alt="QR Code" width="100">
+    <p>Scan to verify receipt</p>
+  </div>
+
+  <div class="footer">
+    <p>Thank you for your purchase!</p>
+    <p>Recyleto Pharmacy • contact@recyleto.com • www.recyleto.com</p>
+  </div>
+</body>
+</html>
