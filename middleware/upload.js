@@ -278,6 +278,7 @@ module.exports = {
     uploadRequest: uploadRequest.single('image'),
     uploadMedicineRequest: uploadRequest.single('image'),
     uploadSupport: uploadSupport.single('attachment'),
+    uploadSupportArray: uploadSupport.array('attachments',5),
     handleMulterError, 
     cleanupUploadedFile,
     

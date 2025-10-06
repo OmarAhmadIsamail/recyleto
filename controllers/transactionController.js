@@ -102,7 +102,7 @@ exports.getTransactionById = async (req, res) => {
   }
 };
 
-// Create a new transaction (without cart)
+// Create a new transaction (without cart) - UPDATED TO FIX THE ERROR
 exports.createTransaction = async (req, res) => {
   try {
     const {
@@ -122,6 +122,7 @@ exports.createTransaction = async (req, res) => {
     // Generate transaction number
     const transactionNumber = await generateTransactionNumber(transactionType);
 
+    // Validate and prepare items
     if (transactionType === 'sale') {
       for (const item of items) {
         const medicine = await Medicine.findById(item.medicineId);
@@ -139,17 +140,24 @@ exports.createTransaction = async (req, res) => {
           });
         }
         
+        // Add required fields for transaction items
         item.genericName = medicine.genericName;
         item.medicineName = medicine.name;
+        item.form = medicine.form;
+        item.packSize = medicine.packSize;
         item.unitPrice = item.unitPrice || medicine.price;
         item.totalPrice = item.quantity * item.unitPrice;
+        item.expiryDate = medicine.expiryDate;
+        item.batchNumber = medicine.batchNumber;
+        item.manufacturer = medicine.manufacturer;
       }
     }
 
     const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
     const totalAmount = Math.max(0, subtotal + tax - discount);
 
-    const transaction = new Transaction({
+    // ✅ FIXED: Create transaction with correct structure for the model
+    const transactionData = {
       pharmacyId,
       transactionType,
       transactionNumber,
@@ -163,11 +171,20 @@ exports.createTransaction = async (req, res) => {
         name: customerName,
         phone: customerPhone
       },
-      paymentMethod,
+      // ✅ FIXED: Use the correct payment structure expected by the model
+      payment: {
+        method: paymentMethod,
+        amount: totalAmount,
+        status: status === 'completed' ? 'completed' : 'pending'
+      },
       status,
-      transactionDate: new Date()
-    });
+      transactionDate: new Date(),
+      // ✅ FIXED: Add required fields
+      createdBy: req.user._id,
+      updatedBy: req.user._id
+    };
 
+    const transaction = new Transaction(transactionData);
     await transaction.save();
 
     // Update stock for completed sales
@@ -187,10 +204,13 @@ exports.createTransaction = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Create transaction error:', error);
+    console.error('Create transaction error details:', error);
+    console.error('Error stack:', error.stack);
+    
     res.status(500).json({
       success: false,
-      message: 'Server error while creating transaction'
+      message: 'Server error while creating transaction',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -336,7 +356,15 @@ exports.addToCart = async (req, res) => {
         discount: 0,
         totalAmount: 0,
         status: 'pending',
-        transactionDate: new Date()
+        transactionDate: new Date(),
+        // ✅ FIXED: Add required fields
+        createdBy: req.user._id,
+        updatedBy: req.user._id,
+        payment: {
+          method: 'cash',
+          amount: 0,
+          status: 'pending'
+        }
       });
     }
 
@@ -423,6 +451,9 @@ exports.addToCart = async (req, res) => {
     // Recalculate totals for transaction
     transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
     transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
+    
+    // ✅ FIXED: Update payment amount
+    transaction.payment.amount = transaction.totalAmount;
 
     await transaction.save();
 
@@ -563,6 +594,9 @@ exports.updateCartItem = async (req, res) => {
         // Recalculate transaction totals
         transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
         transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
+        
+        // ✅ FIXED: Update payment amount
+        transaction.payment.amount = transaction.totalAmount;
 
         await transaction.save();
       }
@@ -630,6 +664,9 @@ exports.removeFromCart = async (req, res) => {
       // Recalculate totals
       transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
       transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
+      
+      // ✅ FIXED: Update payment amount
+      transaction.payment.amount = transaction.totalAmount;
 
       // If no items left, delete the transaction
       if (transaction.items.length === 0) {
@@ -742,13 +779,15 @@ exports.checkoutCart = async (req, res) => {
       name: customerName,
       phone: customerPhone
     };
-    transaction.paymentMethod = paymentMethod;
+    transaction.payment.method = paymentMethod; // ✅ FIXED: Update payment method correctly
     transaction.tax = tax;
     transaction.discount = discount;
     
     // Recalculate total
     transaction.totalAmount = Math.max(0, transaction.subtotal + tax - discount);
     transaction.status = 'completed';
+    transaction.payment.amount = transaction.totalAmount; // ✅ FIXED: Update payment amount
+    transaction.payment.status = 'completed'; // ✅ FIXED: Update payment status
 
     await transaction.save();
 
@@ -824,9 +863,17 @@ exports.purchaseSingleMedicine = async (req, res) => {
         name: customerName,
         phone: customerPhone
       },
-      paymentMethod,
+      // ✅ FIXED: Use correct payment structure
+      payment: {
+        method: paymentMethod,
+        amount: itemToPurchase.totalPrice,
+        status: 'completed'
+      },
       status: 'completed',
-      transactionDate: new Date()
+      transactionDate: new Date(),
+      // ✅ FIXED: Add required fields
+      createdBy: req.user._id,
+      updatedBy: req.user._id
     });
 
     await completedTransaction.save();
@@ -849,6 +896,7 @@ exports.purchaseSingleMedicine = async (req, res) => {
       // Update remaining transaction totals
       transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
       transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
+      transaction.payment.amount = transaction.totalAmount; // ✅ FIXED: Update payment amount
       await transaction.save();
     }
 
