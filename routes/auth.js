@@ -3,13 +3,19 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const { validateResult } = require('../middleware/validateResult');
-const { loginValidator, forgotPasswordValidator, resetPasswordValidator } = require('../validators/authValidator');
+const { 
+    loginValidator, 
+    forgotPasswordValidator, 
+    resetPasswordValidator,
+    verifyOtpValidator // Make sure this is imported
+} = require('../validators/authValidator');
 const { registerPharmacyValidator } = require('../validators/pharmacyValidator');
 const { pharmacyUpload, handleMulterError } = require('../middleware/upload');
 const { authenticate } = require('../middleware/auth');
 
 router.post('/login', loginValidator, validateResult, authController.login);
 router.post('/forgot-password', forgotPasswordValidator, validateResult, authController.forgotPassword);
+router.post('/verify-otp', verifyOtpValidator, validateResult, authController.verifyOtp); // This line was causing the error
 router.post('/reset-password', resetPasswordValidator, validateResult, authController.resetPassword);
 
 // Updated registration route with enhanced upload middleware

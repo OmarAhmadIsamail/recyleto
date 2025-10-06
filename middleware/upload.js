@@ -276,6 +276,7 @@ module.exports = {
     uploadLicense: uploadLicense.single('license'),
     uploadLogo: uploadLogo.single('logo'),
     uploadRequest: uploadRequest.single('image'),
+    uploadMedicineRequest: uploadRequest.single('image'),
     uploadSupport: uploadSupport.single('attachment'),
     handleMulterError, 
     cleanupUploadedFile,

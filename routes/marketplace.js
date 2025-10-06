@@ -7,6 +7,8 @@ const { authenticate } = require('../middleware/auth');
 // Marketplace browsing
 router.get('/medicines', authenticate, marketplaceController.getMarketplaceMedicines);
 
+
+
 // Purchase operations
 router.post('/purchase/full', authenticate, marketplaceController.purchaseFromMarketplace);
 router.post('/purchase/single', authenticate, marketplaceController.purchaseSingleFromMarketplace);

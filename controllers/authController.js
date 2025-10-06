@@ -96,10 +96,16 @@ exports.login = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        const user = await User.findOne({ email });
+        
+        // Find user and explicitly select reset token fields
+        const user = await User.findOne({ email }).select('+resetPasswordToken +resetPasswordExpires');
 
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+            // For security, don't reveal if user exists or not
+            return res.status(200).json({ 
+                success: true, 
+                message: 'If the email exists, a reset code has been sent' 
+            });
         }
 
         const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -111,41 +117,155 @@ exports.forgotPassword = async (req, res) => {
 
         try {
             await sendResetCode(email, resetCode);
+            console.log(`Reset code sent to ${email}: ${resetCode}`); // For debugging
         } catch (emailError) {
             console.error('Failed to send reset code email:', emailError);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Failed to send reset code' 
+            });
         }
 
-        res.status(200).json({ success: true, message: 'Reset code sent to email' });
+        res.status(200).json({ 
+            success: true, 
+            message: 'Reset code sent to email' 
+        });
     } catch (error) {
         console.error('Forgot password error:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error' 
+        });
     }
 };
 
-// ------------------- RESET PASSWORD -------------------
+// ------------------- VERIFY OTP -------------------
+exports.verifyOtp = async (req, res) => {
+    try {
+        const { email, code } = req.body;
+
+        // Find user with reset token fields
+        const user = await User.findOne({
+            email: email.trim().toLowerCase()
+        }).select('+resetPasswordToken +resetPasswordExpires');
+
+        if (!user || !user.resetPasswordToken || user.resetPasswordToken !== code.toString().trim()) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid verification code' 
+            });
+        }
+
+        // Check if code is expired
+        if (user.resetPasswordExpires < Date.now()) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Verification code has expired' 
+            });
+        }
+
+        // Generate token for successful verification
+        const token = jwt.sign(
+            { 
+                userId: user._id, 
+                email: user.email,
+                purpose: 'password_reset' 
+            }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: '15m' }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Verification successful',
+            token: token, // Send token for the reset password step
+            user: {
+                id: user._id,
+                email: user.email,
+                username: user.username,
+                pharmacyName: user.pharmacyName,
+                twoFactorEnabled: user.twoFactorEnabled
+            }
+        });
+
+    } catch (error) {
+        console.error('Verify OTP error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error' 
+        });
+    }
+};
+
+// ------------------- RESET PASSWORD -------------------// ------------------- RESET PASSWORD -------------------
 exports.resetPassword = async (req, res) => {
     try {
         const { email, code, newPassword } = req.body;
+        console.log('Reset password request:', { email, code });
 
-        const user = await User.findOne({
-            email,
-            resetPasswordToken: code,
-            resetPasswordExpires: { $gt: Date.now() }
-        });
-
-        if (!user) {
-            return res.status(400).json({ success: false, message: 'Invalid or expired reset code' });
+        if (!email || !code || !newPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Email, code, and new password are required' 
+            });
         }
 
+        // Find user and verify code directly
+        const user = await User.findOne({
+            email: email.toLowerCase().trim()
+        }).select('+resetPasswordToken +resetPasswordExpires');
+
+        console.log('User found:', !!user);
+        if (user) {
+            console.log('Stored token:', user.resetPasswordToken);
+            console.log('Provided code:', code);
+            console.log('Token matches:', user.resetPasswordToken === code.toString().trim());
+            console.log('Token expires:', new Date(user.resetPasswordExpires));
+            console.log('Current time:', new Date());
+            console.log('Is expired:', user.resetPasswordExpires < Date.now());
+        }
+
+        if (!user || !user.resetPasswordToken) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid verification code' 
+            });
+        }
+
+        if (user.resetPasswordToken !== code.toString().trim()) {
+            console.log('Code mismatch - Stored:', user.resetPasswordToken, 'Provided:', code);
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid verification code' 
+            });
+        }
+
+        if (user.resetPasswordExpires < Date.now()) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Verification code has expired' 
+            });
+        }
+
+        // Update password and clear reset token
         user.password = newPassword;
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
         await user.save();
 
-        res.status(200).json({ success: true, message: 'Password reset successfully' });
+        console.log('Password reset successful for user:', user.email);
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Password reset successfully' 
+        });
+
     } catch (error) {
         console.error('Reset password error:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error' 
+        });
     }
 };
 

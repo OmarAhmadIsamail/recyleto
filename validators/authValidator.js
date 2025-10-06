@@ -68,13 +68,25 @@ exports.forgotPasswordValidator = [
         .withMessage('Please provide a valid email')
 ];
 
-exports.resetPasswordValidator = [
+// Add this new validator for verify-otp endpoint
+exports.verifyOtpValidator = [
     body('email')
         .isEmail()
         .withMessage('Please provide a valid email'),
     body('code')
+        .isLength({ min: 6, max: 6 })
+        .withMessage('Reset code must be 6 digits')
+        .isNumeric()
+        .withMessage('Reset code must contain only numbers')
+];
+
+// Choose ONE of the following resetPasswordValidator approaches:
+
+// APPROACH 1: If using token-based reset (recommended with verify-otp)
+exports.resetPasswordValidator = [
+    body('token')
         .notEmpty()
-        .withMessage('Reset code is required'),
+        .withMessage('Verification token is required'),
     body('newPassword')
         .isLength({ min: 6 })
         .withMessage('Password must be at least 6 characters')
