@@ -1,7 +1,6 @@
 const Transaction = require('../models/Transaction');
 const Medicine = require('../models/Medicine');
 const Cart = require('../models/Cart');
-const CartItem = require('../models/CartItem');
 const mongoose = require('mongoose');
 const { generateTransactionNumber } = require('../utils/helpers');
 
@@ -312,25 +311,48 @@ exports.deleteTransaction = async (req, res) => {
   }
 };
 
-// Add medicine to cart - Creates/updates both transaction and cart
+// Add medicine to cart - Creates/updates both transaction and cart - FIXED VERSION
 exports.addToCart = async (req, res) => {
   try {
-    const { medicineId, quantity, transactionType = 'sale' } = req.body;
+    console.log('🛒 Add to Cart Request Body:', req.body);
+    
+    const { medicineId, quantity, price, transactionType = 'sale' } = req.body;
     const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id;
 
-    const medicine = await Medicine.findById(medicineId);
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found' });
-
-    if (transactionType === 'sale' && medicine.quantity < quantity) {
-      return res.status(400).json({ success: false, message: `Insufficient stock. Available: ${medicine.quantity}` });
+    // Validate required fields
+    if (!medicineId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Medicine ID is required' 
+      });
     }
 
-    // Find or create active transaction
-    let transaction = await Transaction.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'pending' 
-    });
+    if (!quantity || quantity < 1) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid quantity is required' 
+      });
+    }
+
+    // Check if medicine exists
+    const medicine = await Medicine.findById(medicineId);
+    console.log('🔍 Medicine found:', medicine ? medicine.name : 'Not found');
+    
+    if (!medicine) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Medicine not found' 
+      });
+    }
+
+    // Validate stock for sale transactions
+    if (transactionType === 'sale' && medicine.quantity < quantity) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Insufficient stock. Available: ${medicine.quantity}` 
+      });
+    }
 
     // Find or create active cart
     let cart = await Cart.findOne({ 
@@ -339,8 +361,29 @@ exports.addToCart = async (req, res) => {
       status: 'active' 
     });
 
+    if (!cart) {
+      console.log('🛒 Creating new cart...');
+      cart = new Cart({
+        pharmacyId,
+        transactionType,
+        description: 'Active Cart',
+        customerName: '',
+        customerPhone: '',
+        paymentMethod: 'cash',
+        status: 'active'
+      });
+      await cart.save();
+    }
+
+    // Find or create pending transaction
+    let transaction = await Transaction.findOne({ 
+      pharmacyId, 
+      transactionType, 
+      status: 'pending' 
+    });
+
     if (!transaction) {
-      // Create new transaction with pending status
+      console.log('🛒 Creating new pending transaction...');
       const transactionNumber = await generateTransactionNumber(transactionType);
       const transactionRef = `REF-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
       
@@ -357,9 +400,8 @@ exports.addToCart = async (req, res) => {
         totalAmount: 0,
         status: 'pending',
         transactionDate: new Date(),
-        // ✅ FIXED: Add required fields
-        createdBy: req.user._id,
-        updatedBy: req.user._id,
+        createdBy: userId,
+        updatedBy: userId,
         payment: {
           method: 'cash',
           amount: 0,
@@ -368,45 +410,45 @@ exports.addToCart = async (req, res) => {
       });
     }
 
-    if (!cart) {
-      // Create new cart
-      cart = new Cart({
-        pharmacyId,
-        transactionType,
-        description: 'Active Cart',
-        customerName: '',
-        customerPhone: '',
-        paymentMethod: 'cash',
-        status: 'active'
-      });
-      await cart.save(); // Save cart first to get its ID
-    }
-
-    // Check if medicine already exists in transaction
-    const existingItemIndex = transaction.items.findIndex(
-      item => item.medicineId.toString() === medicineId
-    );
-
-    const newItem = {
+    // Prepare item data - use provided price or medicine price
+    const unitPrice = price || medicine.price;
+    const itemData = {
       medicineId: medicine._id,
       medicineName: medicine.name,
       genericName: medicine.genericName,
       form: medicine.form,
       packSize: medicine.packSize,
       quantity: parseInt(quantity),
-      unitPrice: medicine.price,
-      totalPrice: parseInt(quantity) * medicine.price,
+      unitPrice: unitPrice,
       expiryDate: medicine.expiryDate,
       batchNumber: medicine.batchNumber,
-      manufacturer: medicine.manufacturer
+      manufacturer: medicine.manufacturer,
+      pharmacyId: pharmacyId
     };
+
+    console.log('🛒 Adding item to cart:', itemData);
+
+    // Add item to cart using cart method
+    await cart.addItem(itemData);
+
+    // Check if medicine already exists in transaction
+    const existingItemIndex = transaction.items.findIndex(
+      item => item.medicineId && item.medicineId.toString() === medicineId
+    );
 
     if (existingItemIndex >= 0) {
       // Update existing item quantity in transaction
       const existingItem = transaction.items[existingItemIndex];
       const newQuantity = existingItem.quantity + parseInt(quantity);
       
+      // Re-validate stock for updated quantity
       if (transactionType === 'sale' && medicine.quantity < newQuantity) {
+        // Rollback cart addition
+        const cartItemIndex = cart.items.findIndex(item => item.medicineId.toString() === medicineId);
+        if (cartItemIndex >= 0) {
+          cart.items.splice(cartItemIndex, 1);
+          await cart.save();
+        }
         return res.status(400).json({ 
           success: false, 
           message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}, Requested: ${newQuantity}` 
@@ -414,60 +456,37 @@ exports.addToCart = async (req, res) => {
       }
       
       transaction.items[existingItemIndex].quantity = newQuantity;
-      transaction.items[existingItemIndex].totalPrice = newQuantity * medicine.price;
-
-      // Update existing item in cart using cart method
-      await cart.addItem({
-        medicineId: medicine._id,
-        medicineName: medicine.name,
-        genericName: medicine.genericName,
-        form: medicine.form,
-        packSize: medicine.packSize,
-        quantity: parseInt(quantity),
-        unitPrice: medicine.price,
-        expiryDate: medicine.expiryDate,
-        batchNumber: medicine.batchNumber,
-        manufacturer: medicine.manufacturer
-      });
+      transaction.items[existingItemIndex].totalPrice = newQuantity * transaction.items[existingItemIndex].unitPrice;
     } else {
       // Add new item to transaction
+      const newItem = {
+        ...itemData,
+        totalPrice: itemData.quantity * itemData.unitPrice
+      };
       transaction.items.push(newItem);
-
-      // Add new item to cart using cart method
-      await cart.addItem({
-        medicineId: medicine._id,
-        medicineName: medicine.name,
-        genericName: medicine.genericName,
-        form: medicine.form,
-        packSize: medicine.packSize,
-        quantity: parseInt(quantity),
-        unitPrice: medicine.price,
-        expiryDate: medicine.expiryDate,
-        batchNumber: medicine.batchNumber,
-        manufacturer: medicine.manufacturer
-      });
     }
 
     // Recalculate totals for transaction
     transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
     transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
-    
-    // ✅ FIXED: Update payment amount
     transaction.payment.amount = transaction.totalAmount;
 
+    // Save both cart and transaction
     await transaction.save();
+    await cart.save();
+
+    console.log('✅ Cart and transaction updated successfully');
 
     // Populate the transaction for response
     const populatedTransaction = await Transaction.findById(transaction._id)
-      .populate('items.medicineId', 'name genericName form price')
-      .select('pharmacyId transactionType transactionNumber transactionRef items subtotal tax discount totalAmount status');
+      .populate('items.medicineId', 'name genericName form price');
 
     // Get populated cart for response
     const populatedCart = await cart.getPopulatedCart();
 
     res.status(200).json({ 
       success: true, 
-      message: 'Medicine added to cart', 
+      message: 'Medicine added to cart successfully', 
       data: {
         transaction: populatedTransaction,
         cart: populatedCart
@@ -475,8 +494,14 @@ exports.addToCart = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Add to cart error:', error);
-    res.status(500).json({ success: false, message: 'Error adding to cart' });
+    console.error('❌ Add to cart error:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error adding to cart',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
@@ -558,10 +583,13 @@ exports.updateCartItem = async (req, res) => {
       'items._id': itemId
     });
 
-    // Find cart item
-    const cartItem = await CartItem.findById(itemId);
+    // Find cart
+    const cart = await Cart.findOne({
+      pharmacyId,
+      status: 'active'
+    });
 
-    if (!transaction && !cartItem) {
+    if (!transaction && !cart) {
       return res.status(404).json({ success: false, message: 'Cart item not found' });
     }
 
@@ -574,7 +602,7 @@ exports.updateCartItem = async (req, res) => {
         // Validate stock if updating quantity for sale
         if (quantity !== undefined && transaction.transactionType === 'sale') {
           const medicine = await Medicine.findById(item.medicineId);
-          if (medicine.quantity < quantity) {
+          if (medicine && medicine.quantity < quantity) {
             return res.status(400).json({ 
               success: false, 
               message: `Insufficient stock. Available: ${medicine.quantity}` 
@@ -603,18 +631,16 @@ exports.updateCartItem = async (req, res) => {
     }
 
     // Update cart item if exists
-    if (cartItem) {
-      if (quantity !== undefined) {
-        await cartItem.updateQuantity(parseInt(quantity));
-      }
-      if (unitPrice !== undefined) {
-        await cartItem.updatePrice(parseFloat(unitPrice));
-      }
-
-      // Update cart totals
-      const cart = await Cart.findById(cartItem.cartId);
-      if (cart) {
-        await cart.updateTotals();
+    if (cart) {
+      const cartItemIndex = cart.items.findIndex(item => item._id.toString() === itemId);
+      if (cartItemIndex !== -1) {
+        if (quantity !== undefined) {
+          cart.items[cartItemIndex].quantity = parseInt(quantity);
+        }
+        if (unitPrice !== undefined) {
+          cart.items[cartItemIndex].unitPrice = parseFloat(unitPrice);
+        }
+        await cart.save();
       }
     }
 
@@ -647,13 +673,12 @@ exports.removeFromCart = async (req, res) => {
     });
 
     // Find and remove from cart
-    const cartItem = await CartItem.findById(itemId);
-    let cart = null;
-    if (cartItem) {
-      cart = await Cart.findById(cartItem.cartId);
-    }
+    const cart = await Cart.findOne({
+      pharmacyId,
+      status: 'active'
+    });
 
-    if (!transaction && !cartItem) {
+    if (!transaction && !cart) {
       return res.status(404).json({ success: false, message: 'Cart item not found' });
     }
 
@@ -677,8 +702,9 @@ exports.removeFromCart = async (req, res) => {
     }
 
     // Remove from cart
-    if (cart && cartItem) {
-      await cart.removeItem(itemId);
+    if (cart) {
+      cart.items = cart.items.filter(item => item._id.toString() !== itemId);
+      await cart.save();
     }
 
     // Response data
@@ -836,8 +862,11 @@ exports.purchaseSingleMedicine = async (req, res) => {
       'items._id': itemId
     });
 
-    // Find cart item
-    const cartItem = await CartItem.findById(itemId);
+    // Find cart
+    const cart = await Cart.findOne({
+      pharmacyId,
+      status: 'active'
+    });
 
     if (!transaction) {
       return res.status(404).json({ success: false, message: 'Item not found in transaction' });
@@ -901,11 +930,9 @@ exports.purchaseSingleMedicine = async (req, res) => {
     }
 
     // Remove item from cart
-    if (cartItem) {
-      const cart = await Cart.findById(cartItem.cartId);
-      if (cart) {
-        await cart.removeItem(itemId);
-      }
+    if (cart) {
+      cart.items = cart.items.filter(item => item._id.toString() !== itemId);
+      await cart.save();
     }
 
     res.status(200).json({

@@ -4,7 +4,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const { validateResult } = require('../middleware/validateResult');
 const { medicineRequestValidator } = require('../validators/requestValidator');
-const { uploadMedicineRequest } = require('../middleware/upload'); // Correct import
+const { uploadMedicineRequest } = require('../middleware/upload'); 
 const {
   createMedicineRequest,
   getPharmacyMedicineRequests,
@@ -25,6 +25,12 @@ const handleUploadError = (error, req, res, next) => {
             return res.status(400).json({
                 success: false,
                 message: 'Too many files uploaded.'
+            });
+        }
+        if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+            return res.status(400).json({
+                success: false,
+                message: 'Unexpected field name for file upload. Use "image" as field name.'
             });
         }
         return res.status(400).json({
