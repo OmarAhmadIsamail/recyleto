@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const checkoutController = require('../controllers/checkoutController');
-const { authenticate } = require('../middleware/auth'); // ensure this is a function
+const { authenticate } = require('../middleware/auth'); 
+
+// Apply auth middleware to all routes
+router.use(authenticate); // Change from 'auth' to 'authenticate'
 
 // Checkout routes
-router.post('/process', authenticate, checkoutController.processCheckout);
-router.post('/quick', authenticate, checkoutController.quickCheckout);
-router.post('/payment', authenticate, checkoutController.processPayment);
-router.get('/summary', authenticate, checkoutController.getCheckoutSummary);
+router.post('/process', checkoutController.processCheckout);
+router.get('/summary', checkoutController.getCheckoutSummary);
+router.post('/apply-discount', checkoutController.applyDiscount);
+router.post('/set-tax', checkoutController.setTax);
 
 module.exports = router;

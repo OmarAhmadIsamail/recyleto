@@ -5,200 +5,111 @@ const transactionItemSchema = new mongoose.Schema({
     medicineId: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'Medicine', 
-        required: true,
-        index: true
+        required: true
     },
     medicineName: { 
         type: String, 
         required: true,
-        trim: true,
-        maxlength: 200
+        trim: true
     },
     genericName: { 
         type: String, 
         required: true,
-        trim: true,
-        maxlength: 200
+        trim: true
     },
     form: {
         type: String,
-        trim: true,
-        maxlength: 50
+        trim: true
     },
     packSize: { 
         type: String, 
         required: true,
-        trim: true,
-        maxlength: 50
+        trim: true
     },
     quantity: { 
         type: Number, 
         required: true, 
-        min: 1,
-        validate: {
-            validator: Number.isInteger,
-            message: 'Quantity must be an integer'
-        }
+        min: 1
     },
     unitPrice: { 
         type: Number, 
         required: true, 
-        min: 0,
-        max: 1000000 // Reasonable upper limit
+        min: 0
     },
     totalPrice: { 
         type: Number, 
         required: true, 
-        min: 0,
-        validate: {
-            validator: function(value) {
-                return value === this.quantity * this.unitPrice;
-            },
-            message: 'Total price must equal quantity × unit price'
-        }
+        min: 0
     },
     expiryDate: { 
-        type: Date,
-        validate: {
-            validator: function(date) {
-                return !date || date > new Date();
-            },
-            message: 'Expiry date must be in the future'
-        }
+        type: Date
     },
     batchNumber: { 
         type: String,
-        trim: true,
-        uppercase: true,
-        maxlength: 50
+        trim: true
     },
     manufacturer: {
         type: String,
-        trim: true,
-        maxlength: 100
-    },
-    costPrice: { // For profit calculation
-        type: Number,
-        min: 0
-    },
-    profitMargin: { // Calculated field
-        type: Number,
-        min: -100,
-        max: 1000
+        trim: true
     }
-}, { _id: false }); // Prevents unnecessary _id for subdocuments
-
-const refundSchema = new mongoose.Schema({
-    refundId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Refund',
-        required: true
-    },
-    amount: { 
-        type: Number, 
-        required: true, 
-        min: 0,
-        max: 1000000
-    },
-    date: { 
-        type: Date, 
-        default: Date.now,
-        index: true
-    },
-    reason: { 
-        type: String, 
-        trim: true,
-        maxlength: 500
-    },
-    paymentMethod: {
-        type: String,
-        enum: ['cash', 'card', 'bank_transfer', 'digital_wallet', 'credit_note'],
-        required: true
-    },
-    processedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-    },
-    notes: {
-        type: String,
-        trim: true,
-        maxlength: 500
-    }
-}, { _id: false });
+}, { 
+    timestamps: true,
+    _id: true // Keep _id for individual item operations
+});
 
 const transactionSchema = new mongoose.Schema({
+    // Core Identifiers
     pharmacyId: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User', 
         required: true,
         index: true
     },
-    branchId: { // Multi-branch support
+    userId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Branch',
-        index: true
+        ref: 'User',
+        required: true
     },
+    
+    // Transaction Type & Status
     transactionType: {
         type: String,
         required: true,
-        enum: ['sale', 'purchase', 'return', 'adjustment', 'transfer'],
+        enum: ['sale', 'purchase', 'return', 'adjustment'],
         default: 'sale',
         index: true
     },
+    status: {
+        type: String,
+        enum: ['pending', 'completed', 'cancelled', 'refunded'],
+        default: 'pending'
+    },
     
     // Unique Identifiers
-    transactionId: { 
-        type: String, 
-        unique: true, 
-        sparse: true,
-        index: true,
-        immutable: true // Cannot be changed once set
-    },
     transactionNumber: { 
         type: String, 
-        unique: true, 
-        sparse: true,
-        index: true,
-        immutable: true
+        unique: true,
+        index: true
     },
     transactionRef: { 
         type: String, 
-        unique: true, 
-        sparse: true,
-        index: true,
-        immutable: true
+        unique: true,
+        index: true
     },
     
-    // Core Transaction Details
+    // Transaction Details
     description: { 
         type: String, 
-        trim: true, 
-        maxlength: 1000 
+        trim: true,
+        default: ''
     },
-    items: {
-        type: [transactionItemSchema],
-        validate: {
-            validator: function(items) {
-                return items && items.length > 0;
-            },
-            message: 'Transaction must have at least one item'
-        }
-    },
+    items: [transactionItemSchema],
     
-    // Financial Calculations
+    // Financial Information
     subtotal: { 
         type: Number, 
-        required: true, 
         default: 0,
-        min: 0,
-        max: 10000000
-    },
-    taxRate: { // Store tax rate for reporting
-        type: Number,
-        default: 0,
-        min: 0,
-        max: 100
+        min: 0
     },
     tax: { 
         type: Number, 
@@ -210,134 +121,72 @@ const transactionSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    discountType: {
+        type: String,
+        enum: ['fixed', 'percentage'],
+        default: 'fixed'
+    },
     totalAmount: { 
         type: Number, 
-        required: true, 
-        min: 0,
-        max: 10000000,
-        default: 0
+        default: 0,
+        min: 0
     },
     
     // Customer Information
     customerInfo: {
-        customerId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Customer'
-        },
         name: { 
             type: String, 
-            trim: true,
-            maxlength: 100
+            trim: true
         },
         phone: { 
             type: String, 
-            trim: true,
-            match: [/^\+?[\d\s\-\(\)]{10,}$/, 'Please enter a valid phone number']
+            trim: true
         },
         email: {
             type: String,
             trim: true,
-            lowercase: true,
-            match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
-        },
-        loyaltyPointsEarned: {
-            type: Number,
-            default: 0,
-            min: 0
-        },
-        loyaltyPointsRedeemed: {
-            type: Number,
-            default: 0,
-            min: 0
+            lowercase: true
         }
     },
     
-    // Enhanced Payment Section
+    // Payment Information
     payment: {
         method: {
             type: String,
-            required: true,
-            enum: ['cash', 'card', 'bank_transfer', 'digital_wallet', 'mobile_money', 'credit', 'loyalty_points'],
+            enum: ['cash', 'card', 'bank_transfer', 'digital_wallet', 'mobile_money', 'credit'],
             default: 'cash'
         },
-        paymentMethodId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'PaymentMethod'
+        details: {
+            type: mongoose.Schema.Types.Mixed // Flexible for different payment methods
         },
         amount: {
             type: Number,
-            required: true,
-            min: 0,
-            validate: {
-                validator: function(value) {
-                    return value <= this.ownerDocument().totalAmount;
-                },
-                message: 'Payment amount cannot exceed total amount'
-            }
+            default: 0,
+            min: 0
         },
         status: {
             type: String,
-            enum: ['pending', 'completed', 'failed', 'refunded', 'partially_refunded', 'authorized'],
+            enum: ['pending', 'completed', 'failed', 'refunded'],
             default: 'pending'
         },
-        
-        // Digital wallet specific
-        walletProvider: String,
-        phoneNumber: String,
         transactionId: String,
-        
-        // Card specific
-        cardLastFour: String,
-        cardBrand: String,
-        authorizationCode: String,
-        
-        // Bank transfer specific
-        bankReference: String,
-        bankName: String,
-        accountLastFour: String,
-        
-        // Credit specific
-        creditTerms: String,
-        dueDate: Date,
-        creditLimitUsed: Number,
-        
-        // Timestamps
-        paidAt: Date,
-        failedAt: Date,
-        refundedAt: Date,
-        authorizedAt: Date
+        processedAt: Date
     },
     
-    // Transaction Status
-    status: {
-        type: String,
-        enum: ['draft', 'pending', 'completed', 'cancelled', 'refunded', 'partially_refunded', 'on_hold'],
-        default: 'draft'
-    },
-    
-    transactionDate: { 
-        type: Date, 
-        default: Date.now,
-        index: true 
-    },
-    
-    // Refunds Tracking
-    refunds: [refundSchema],
-    
-    // Enhanced Delivery Section
+    // Delivery Information
     deliveryAddress: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'DeliveryAddress'
     },
     deliveryOption: {
         type: String,
-        enum: ['pickup', 'delivery', 'shipping'],
+        enum: ['pickup', 'delivery'],
         default: 'pickup'
     },
     deliveryStatus: {
         type: String,
-        enum: ['pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled', 'failed'],
-        default: 'pending'
+        enum: ['pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled', 'not_required'],
+        default: 'not_required'
     },
     deliveryFee: {
         type: Number,
@@ -345,30 +194,24 @@ const transactionSchema = new mongoose.Schema({
         min: 0
     },
     estimatedDelivery: {
-        type: Date,
-        validate: {
-            validator: function(date) {
-                return !date || date > this.transactionDate;
-            },
-            message: 'Estimated delivery must be after transaction date'
-        }
+        type: Date
     },
     actualDelivery: {
-        type: Date,
-        validate: {
-            validator: function(date) {
-                return !date || date >= this.transactionDate;
-            },
-            message: 'Actual delivery cannot be before transaction date'
-        }
+        type: Date
     },
     deliveryNotes: {
         type: String,
-        maxlength: 1000
+        trim: true
     },
-    deliveryPerson: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+    
+    // Timestamps
+    transactionDate: { 
+        type: Date, 
+        default: Date.now,
+        index: true 
+    },
+    checkoutDate: {
+        type: Date
     },
     
     // Audit Fields
@@ -381,55 +224,20 @@ const transactionSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
-    cancelledBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    cancellationReason: {
+    
+    // Additional Info
+    notes: {
         type: String,
-        trim: true,
-        maxlength: 500
+        trim: true
     },
     
-    // Additional Features
-    isPrescription: {
-        type: Boolean,
-        default: false
-    },
-    prescriptionId: {
+    // Source tracking for cart operations
+    sourceTransactionId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Prescription'
+        ref: 'Transaction'
     },
-    marketplace: {
-        isMarketplace: {
-            type: Boolean,
-            default: false
-        },
-        sellerId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        commission: {
-            type: Number,
-            default: 0
-        },
-        platformFee: {
-            type: Number,
-            default: 0
-        }
-    },
-    
-    // Analytics and Reporting
-    profit: { // Calculated profit
-        type: Number,
-        default: 0
-    },
-    marginPercentage: { // Profit margin percentage
-        type: Number,
-        default: 0,
-        min: -100,
-        max: 1000
-    }
+    sourceTransactionNumber: String
+
 }, { 
     timestamps: true,
     toJSON: { virtuals: true },
@@ -437,167 +245,192 @@ const transactionSchema = new mongoose.Schema({
 });
 
 // ===== VIRTUAL FIELDS =====
-transactionSchema.virtual('totalRefunded').get(function() {
-    return this.refunds.reduce((total, refund) => total + (refund.amount || 0), 0);
+transactionSchema.virtual('itemCount').get(function() {
+    return this.items.length;
 });
 
-transactionSchema.virtual('amountDue').get(function() {
-    return Math.max(0, this.totalAmount - (this.payment.amount || 0));
+transactionSchema.virtual('totalQuantity').get(function() {
+    return this.items.reduce((total, item) => total + item.quantity, 0);
 });
 
 transactionSchema.virtual('isPaid').get(function() {
-    return this.payment.status === 'completed' && this.payment.amount >= this.totalAmount;
+    return this.payment.status === 'completed';
 });
 
-transactionSchema.virtual('isOverdue').get(function() {
-    if (this.payment.method !== 'credit') return false;
-    return this.payment.dueDate && this.payment.dueDate < new Date() && !this.isPaid;
+transactionSchema.virtual('amountDue').get(function() {
+    return Math.max(0, this.totalAmount - this.payment.amount);
 });
 
-transactionSchema.virtual('ageInDays').get(function() {
-    return Math.floor((new Date() - this.transactionDate) / (1000 * 60 * 60 * 24));
+transactionSchema.virtual('ageInHours').get(function() {
+    return Math.floor((new Date() - this.createdAt) / (1000 * 60 * 60));
 });
 
 // ===== STATIC METHODS =====
-transactionSchema.statics.generateUniqueId = async function(prefix = 'TXN') {
-    const retryCount = 3;
-    
-    for (let attempt = 0; attempt < retryCount; attempt++) {
-        try {
-            const timestamp = Date.now().toString(36).toUpperCase();
-            const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-            const uniqueId = `${prefix}-${timestamp}-${random}`;
-            
-            const exists = await this.findOne({ transactionId: uniqueId });
-            if (!exists) return uniqueId;
-        } catch (error) {
-            if (attempt === retryCount - 1) throw error;
-        }
+transactionSchema.statics.generateTransactionNumber = async function(transactionType = 'sale') {
+    try {
+        const prefix = transactionType.slice(0, 3).toUpperCase();
+        const counter = await Counter.findByIdAndUpdate(
+            { _id: `transaction_${transactionType}` },
+            { $inc: { sequence_value: 1 } },
+            { new: true, upsert: true }
+        );
+        
+        return `${prefix}${String(counter.sequence_value).padStart(6, '0')}`;
+    } catch (error) {
+        // Fallback if counter fails
+        const timestamp = Date.now().toString(36).toUpperCase();
+        const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+        return `${prefix}${timestamp}${random}`;
     }
-    
-    throw new Error('Failed to generate unique transaction ID');
 };
 
 transactionSchema.statics.findByStatus = function(pharmacyId, status) {
     return this.find({ pharmacyId, status }).sort({ transactionDate: -1 });
 };
 
-transactionSchema.statics.getSalesReport = async function(pharmacyId, startDate, endDate) {
-    const matchStage = {
-        pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-        transactionType: 'sale',
-        status: 'completed',
-        transactionDate: { $gte: new Date(startDate), $lte: new Date(endDate) }
-    };
+transactionSchema.statics.getDailySales = async function(pharmacyId, date = new Date()) {
+    const startOfDay = new Date(date.setHours(0, 0, 0, 0));
+    const endOfDay = new Date(date.setHours(23, 59, 59, 999));
     
     return this.aggregate([
-        { $match: matchStage },
+        {
+            $match: {
+                pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
+                transactionType: 'sale',
+                status: 'completed',
+                transactionDate: { $gte: startOfDay, $lte: endOfDay }
+            }
+        },
         {
             $group: {
                 _id: null,
                 totalSales: { $sum: '$totalAmount' },
-                totalTransactions: { $sum: 1 },
-                averageTransaction: { $avg: '$totalAmount' },
-                totalTax: { $sum: '$tax' },
-                totalDiscount: { $sum: '$discount' },
-                totalProfit: { $sum: '$profit' }
+                transactionCount: { $sum: 1 },
+                averageSale: { $avg: '$totalAmount' }
             }
         }
     ]);
 };
 
 // ===== INSTANCE METHODS =====
-transactionSchema.methods.calculateProfit = function() {
-    this.profit = this.items.reduce((total, item) => {
-        const cost = item.costPrice || 0;
-        return total + ((item.unitPrice - cost) * item.quantity);
-    }, 0);
+transactionSchema.methods.calculateTotals = function() {
+    // Calculate item totals
+    this.items.forEach(item => {
+        item.totalPrice = item.quantity * item.unitPrice;
+    });
     
-    this.marginPercentage = this.subtotal > 0 ? (this.profit / this.subtotal) * 100 : 0;
+    // Calculate subtotal
+    this.subtotal = this.items.reduce((total, item) => total + item.totalPrice, 0);
+    
+    // Calculate total amount
+    let discountAmount = this.discount;
+    if (this.discountType === 'percentage') {
+        discountAmount = (this.subtotal * this.discount) / 100;
+    }
+    
+    this.totalAmount = Math.max(0, this.subtotal + this.tax - discountAmount + this.deliveryFee);
+    
+    // Sync payment amount
+    if (this.payment) {
+        this.payment.amount = this.totalAmount;
+    }
+    
     return this;
 };
 
-transactionSchema.methods.canRefund = function() {
-    return this.status === 'completed' && 
-           this.totalRefunded < this.totalAmount &&
-           this.transactionDate > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // Within 90 days
+transactionSchema.methods.canCheckout = function() {
+    return this.status === 'pending' && 
+           this.items.length > 0 && 
+           this.totalAmount > 0;
 };
 
-transactionSchema.methods.processRefund = function(refundData) {
-    if (!this.canRefund()) {
-        throw new Error('Transaction cannot be refunded');
+transactionSchema.methods.completeCheckout = function(paymentData = {}) {
+    if (!this.canCheckout()) {
+        throw new Error('Transaction cannot be completed');
     }
     
-    const refundAmount = Math.min(refundData.amount, this.totalAmount - this.totalRefunded);
+    this.status = 'completed';
+    this.checkoutDate = new Date();
     
-    this.refunds.push({
-        refundId: new mongoose.Types.ObjectId(),
-        amount: refundAmount,
-        date: new Date(),
-        reason: refundData.reason,
-        paymentMethod: refundData.paymentMethod,
-        processedBy: refundData.processedBy,
-        notes: refundData.notes
-    });
-    
-    this.updateRefundStatus();
-    return refundAmount;
-};
-
-transactionSchema.methods.updateRefundStatus = function() {
-    const totalRefunded = this.totalRefunded;
-    
-    if (totalRefunded >= this.totalAmount) {
-        this.status = 'refunded';
-        this.payment.status = 'refunded';
-        this.payment.refundedAt = new Date();
-    } else if (totalRefunded > 0) {
-        this.status = 'partially_refunded';
-        this.payment.status = 'partially_refunded';
+    // Update payment information
+    if (paymentData.method) {
+        this.payment.method = paymentData.method;
     }
+    if (paymentData.details) {
+        this.payment.details = paymentData.details;
+    }
+    
+    this.payment.status = 'completed';
+    this.payment.processedAt = new Date();
+    
+    return this;
 };
 
-transactionSchema.methods.validateDeliveryTransition = function(newStatus) {
-    const validTransitions = {
-        'pending': ['confirmed', 'cancelled'],
-        'confirmed': ['preparing', 'cancelled'],
-        'preparing': ['out_for_delivery', 'cancelled'],
-        'out_for_delivery': ['delivered', 'failed', 'cancelled'],
-        'delivered': [],
-        'cancelled': [],
-        'failed': ['cancelled']
-    };
+transactionSchema.methods.addItem = function(itemData) {
+    const existingItemIndex = this.items.findIndex(
+        item => item.medicineId.toString() === itemData.medicineId.toString()
+    );
+
+    if (existingItemIndex >= 0) {
+        // Update existing item
+        this.items[existingItemIndex].quantity += itemData.quantity;
+        this.items[existingItemIndex].totalPrice = 
+            this.items[existingItemIndex].quantity * this.items[existingItemIndex].unitPrice;
+    } else {
+        // Add new item
+        const newItem = {
+            ...itemData,
+            totalPrice: itemData.quantity * itemData.unitPrice
+        };
+        this.items.push(newItem);
+    }
     
-    const currentStatus = this.deliveryStatus;
-    return validTransitions[currentStatus]?.includes(newStatus) || false;
+    this.calculateTotals();
+    return this;
+};
+
+transactionSchema.methods.removeItem = function(itemId) {
+    this.items = this.items.filter(item => item._id.toString() !== itemId);
+    this.calculateTotals();
+    return this;
+};
+
+transactionSchema.methods.updateItemQuantity = function(itemId, quantity) {
+    const item = this.items.id(itemId);
+    if (item && quantity > 0) {
+        item.quantity = quantity;
+        item.totalPrice = quantity * item.unitPrice;
+        this.calculateTotals();
+    }
+    return this;
 };
 
 // ===== PRE-SAVE MIDDLEWARE =====
 transactionSchema.pre('save', async function(next) {
     try {
-        // Generate unique IDs for new transactions
+        // Generate unique identifiers for new transactions
         if (this.isNew) {
-            if (!this.transactionId) {
-                this.transactionId = await this.constructor.generateUniqueId();
-            }
             if (!this.transactionNumber) {
-                const counter = await Counter.getNextSequence(`${this.transactionType}_number`);
-                this.transactionNumber = `${this.transactionType.slice(0,3).toUpperCase()}${String(counter).padStart(8, '0')}`;
+                this.transactionNumber = await this.constructor.generateTransactionNumber(this.transactionType);
             }
             if (!this.transactionRef) {
-                this.transactionRef = await this.constructor.generateUniqueId('REF');
+                this.transactionRef = `REF-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
             }
         }
         
-        // Calculate financials
-        this.calculateFinancials();
-        this.calculateProfit();
+        // Calculate totals before saving
+        this.calculateTotals();
         
-        // Auto-update status based on payment and delivery
-        this.autoUpdateStatus();
+        // Set updatedBy if not set
+        if (this.isModified() && !this.updatedBy) {
+            this.updatedBy = this.createdBy;
+        }
         
-        // Set updatedBy field
-        this.updatedBy = this.updatedBy || this.createdBy;
+        // Auto-update delivery status for pickup orders
+        if (this.deliveryOption === 'pickup' && this.deliveryStatus === 'not_required' && this.status === 'completed') {
+            this.deliveryStatus = 'delivered';
+            this.actualDelivery = new Date();
+        }
         
         next();
     } catch (error) {
@@ -605,46 +438,31 @@ transactionSchema.pre('save', async function(next) {
     }
 });
 
-transactionSchema.methods.calculateFinancials = function() {
-    this.subtotal = this.items.reduce((total, item) => total + (item.totalPrice || 0), 0);
-    this.totalAmount = Math.max(0, this.subtotal + (this.tax || 0) - (this.discount || 0) + (this.deliveryFee || 0));
-    
-    // Sync payment amount
-    if (this.payment.amount !== this.totalAmount) {
-        this.payment.amount = this.totalAmount;
+transactionSchema.pre('validate', function(next) {
+    // Ensure payment amount matches total amount for completed transactions
+    if (this.status === 'completed' && this.payment.status === 'completed') {
+        if (this.payment.amount < this.totalAmount) {
+            this.invalidate('payment.amount', 'Payment amount must equal total amount for completed transactions');
+        }
     }
-};
+    next();
+});
 
-transactionSchema.methods.autoUpdateStatus = function() {
-    // Update status based on payment
-    if (this.payment.status === 'completed' && this.status === 'pending') {
-        this.status = 'completed';
-        this.payment.paidAt = this.payment.paidAt || new Date();
-    }
-    
-    // Auto-cancel if payment failed
-    if (this.payment.status === 'failed' && this.status !== 'cancelled') {
-        this.status = 'pending';
-        this.payment.failedAt = new Date();
-    }
-};
-
-// ===== COMPOUND INDEXES =====
-transactionSchema.index({ pharmacyId: 1, transactionDate: -1 });
+// ===== INDEXES =====
 transactionSchema.index({ pharmacyId: 1, status: 1, transactionDate: -1 });
-transactionSchema.index({ 'customerInfo.phone': 1, transactionDate: -1 });
-transactionSchema.index({ transactionDate: 1, status: 1 });
-transactionSchema.index({ 'payment.status': 1, transactionDate: -1 });
-transactionSchema.index({ deliveryStatus: 1, estimatedDelivery: 1 });
 transactionSchema.index({ pharmacyId: 1, transactionType: 1, createdAt: -1 });
+transactionSchema.index({ 'customerInfo.phone': 1 });
+transactionSchema.index({ transactionDate: 1 });
+transactionSchema.index({ 'payment.status': 1 });
+transactionSchema.index({ deliveryStatus: 1 });
 
-// Text index for search
+// Text search index
 transactionSchema.index({
-    'transactionNumber': 'text',
-    'transactionRef': 'text',
+    transactionNumber: 'text',
+    transactionRef: 'text',
     'customerInfo.name': 'text',
     'customerInfo.phone': 'text',
-    'description': 'text'
+    description: 'text'
 });
 
 module.exports = mongoose.model('Transaction', transactionSchema);

@@ -21,8 +21,9 @@ const businessSettingsRoutes = require('./routes/businessSettings');
 const analyticsRoutes = require('./routes/analytics');
 const paymentMethodRoutes = require('./routes/paymentMethod');
 const deliveryRoutes = require('./routes/delivery');
-const salesRoutes = require('./routes/sales'); // Added sales routes
-const marketplaceRoutes = require('./routes/marketplace'); // Added marketplace routes
+const salesRoutes = require('./routes/sales');
+const marketplaceRoutes = require('./routes/marketplace');
+const cartRoutes = require('./routes/cart');
 
 // Middleware
 const { handleMulterError } = require('./middleware/upload');
@@ -36,8 +37,8 @@ const createUploadsDirectories = () => {
         'uploads/licenses',
         'uploads/requests',
         'uploads/deliveries',
-        'uploads/sales', // Added sales directory
-        'uploads/marketplace' // Added marketplace directory
+        'uploads/sales',
+        'uploads/marketplace'
     ];
 
     directories.forEach(dir => {
@@ -59,16 +60,22 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static('uploads'));
 
-// Session middleware configuration - Added after other middleware
+// Session middleware configuration
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: false, // Set to true if using HTTPS
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    secure: false,
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
+
+// Debug middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -85,8 +92,9 @@ app.use('/api/settings/business', businessSettingsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/payment-methods', paymentMethodRoutes);
 app.use('/api/delivery', deliveryRoutes);
-app.use('/api/sales', salesRoutes); // Added sales routes
-app.use('/api/marketplace', marketplaceRoutes); // Added marketplace routes
+app.use('/api/sales', salesRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/cart', cartRoutes);
 
 // Multer error handling
 app.use(handleMulterError);
@@ -105,6 +113,7 @@ app.use((error, req, res, next) => {
 
 // 404 handler
 app.use((req, res) => {
+    console.log('404 - Route not found:', req.method, req.url);
     res.status(404).json({
         success: false,
         message: 'Route not found'
@@ -130,6 +139,7 @@ app.listen(PORT, () => {
     console.log(`- /api/analytics`);
     console.log(`- /api/payment-methods`);
     console.log(`- /api/delivery`);
-    console.log(`- /api/sales`); // Added sales endpoint
-    console.log(`- /api/marketplace`); // Added marketplace endpoint
+    console.log(`- /api/sales`);
+    console.log(`- /api/marketplace`);
+    console.log(`- /api/cart`);
 });

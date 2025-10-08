@@ -1,9 +1,9 @@
 const Transaction = require('../models/Transaction');
 const Medicine = require('../models/Medicine');
-const Cart = require('../models/Cart');
 const mongoose = require('mongoose');
 const { generateTransactionNumber } = require('../utils/helpers');
 
+// Get all transactions with filtering and pagination
 exports.getTransactions = async (req, res) => {
   try {
     const { 
@@ -84,24 +84,36 @@ exports.getTransactionById = async (req, res) => {
     const pharmacyId = req.user.pharmacyId || req.user._id;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid transaction ID' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid transaction ID' 
+      });
     }
 
     const transaction = await Transaction.findOne({ _id: id, pharmacyId })
       .populate('items.medicineId', 'name genericName form price');
 
     if (!transaction) {
-      return res.status(404).json({ success: false, message: 'Transaction not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Transaction not found' 
+      });
     }
 
-    res.status(200).json({ success: true, data: transaction });
+    res.status(200).json({ 
+      success: true, 
+      data: transaction 
+    });
   } catch (error) {
     console.error('Get transaction error:', error);
-    res.status(500).json({ success: false, message: 'Server error while fetching transaction' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while fetching transaction' 
+    });
   }
 };
 
-// Create a new transaction (without cart) - UPDATED TO FIX THE ERROR
+// Create a new transaction - UPDATED TO INCLUDE USER ID
 exports.createTransaction = async (req, res) => {
   try {
     const {
@@ -117,6 +129,7 @@ exports.createTransaction = async (req, res) => {
     } = req.body;
     
     const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id; // Get user ID from authenticated user
 
     // Generate transaction number
     const transactionNumber = await generateTransactionNumber(transactionType);
@@ -155,9 +168,10 @@ exports.createTransaction = async (req, res) => {
     const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
     const totalAmount = Math.max(0, subtotal + tax - discount);
 
-    // ✅ FIXED: Create transaction with correct structure for the model
+    // ✅ FIXED: Include all required fields including userId
     const transactionData = {
       pharmacyId,
+      userId, // Add userId
       transactionType,
       transactionNumber,
       description,
@@ -170,7 +184,6 @@ exports.createTransaction = async (req, res) => {
         name: customerName,
         phone: customerPhone
       },
-      // ✅ FIXED: Use the correct payment structure expected by the model
       payment: {
         method: paymentMethod,
         amount: totalAmount,
@@ -178,9 +191,9 @@ exports.createTransaction = async (req, res) => {
       },
       status,
       transactionDate: new Date(),
-      // ✅ FIXED: Add required fields
-      createdBy: req.user._id,
-      updatedBy: req.user._id
+      // ✅ FIXED: Add all required user fields
+      createdBy: userId,
+      updatedBy: userId
     };
 
     const transaction = new Transaction(transactionData);
@@ -214,12 +227,13 @@ exports.createTransaction = async (req, res) => {
   }
 };
 
-// Update a transaction
+// Update a transaction - UPDATED TO INCLUDE USER ID
 exports.updateTransaction = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
     const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ 
@@ -243,6 +257,9 @@ exports.updateTransaction = async (req, res) => {
         message: 'Cannot modify completed transactions'
       });
     }
+
+    // Add updatedBy field
+    updates.updatedBy = userId;
 
     const updatedTransaction = await Transaction.findByIdAndUpdate(
       id, 
@@ -311,641 +328,243 @@ exports.deleteTransaction = async (req, res) => {
   }
 };
 
-// Add medicine to cart - Creates/updates both transaction and cart - FIXED VERSION
-exports.addToCart = async (req, res) => {
-  try {
-    console.log('🛒 Add to Cart Request Body:', req.body);
-    
-    const { medicineId, quantity, price, transactionType = 'sale' } = req.body;
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const userId = req.user._id;
-
-    // Validate required fields
-    if (!medicineId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Medicine ID is required' 
-      });
-    }
-
-    if (!quantity || quantity < 1) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Valid quantity is required' 
-      });
-    }
-
-    // Check if medicine exists
-    const medicine = await Medicine.findById(medicineId);
-    console.log('🔍 Medicine found:', medicine ? medicine.name : 'Not found');
-    
-    if (!medicine) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Medicine not found' 
-      });
-    }
-
-    // Validate stock for sale transactions
-    if (transactionType === 'sale' && medicine.quantity < quantity) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Insufficient stock. Available: ${medicine.quantity}` 
-      });
-    }
-
-    // Find or create active cart
-    let cart = await Cart.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'active' 
-    });
-
-    if (!cart) {
-      console.log('🛒 Creating new cart...');
-      cart = new Cart({
-        pharmacyId,
-        transactionType,
-        description: 'Active Cart',
-        customerName: '',
-        customerPhone: '',
-        paymentMethod: 'cash',
-        status: 'active'
-      });
-      await cart.save();
-    }
-
-    // Find or create pending transaction
-    let transaction = await Transaction.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'pending' 
-    });
-
-    if (!transaction) {
-      console.log('🛒 Creating new pending transaction...');
-      const transactionNumber = await generateTransactionNumber(transactionType);
-      const transactionRef = `REF-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-      
-      transaction = new Transaction({
-        pharmacyId,
-        transactionType,
-        transactionNumber,
-        transactionRef,
-        description: 'Cart Transaction',
-        items: [],
-        subtotal: 0,
-        tax: 0,
-        discount: 0,
-        totalAmount: 0,
-        status: 'pending',
-        transactionDate: new Date(),
-        createdBy: userId,
-        updatedBy: userId,
-        payment: {
-          method: 'cash',
-          amount: 0,
-          status: 'pending'
-        }
-      });
-    }
-
-    // Prepare item data - use provided price or medicine price
-    const unitPrice = price || medicine.price;
-    const itemData = {
-      medicineId: medicine._id,
-      medicineName: medicine.name,
-      genericName: medicine.genericName,
-      form: medicine.form,
-      packSize: medicine.packSize,
-      quantity: parseInt(quantity),
-      unitPrice: unitPrice,
-      expiryDate: medicine.expiryDate,
-      batchNumber: medicine.batchNumber,
-      manufacturer: medicine.manufacturer,
-      pharmacyId: pharmacyId
-    };
-
-    console.log('🛒 Adding item to cart:', itemData);
-
-    // Add item to cart using cart method
-    await cart.addItem(itemData);
-
-    // Check if medicine already exists in transaction
-    const existingItemIndex = transaction.items.findIndex(
-      item => item.medicineId && item.medicineId.toString() === medicineId
-    );
-
-    if (existingItemIndex >= 0) {
-      // Update existing item quantity in transaction
-      const existingItem = transaction.items[existingItemIndex];
-      const newQuantity = existingItem.quantity + parseInt(quantity);
-      
-      // Re-validate stock for updated quantity
-      if (transactionType === 'sale' && medicine.quantity < newQuantity) {
-        // Rollback cart addition
-        const cartItemIndex = cart.items.findIndex(item => item.medicineId.toString() === medicineId);
-        if (cartItemIndex >= 0) {
-          cart.items.splice(cartItemIndex, 1);
-          await cart.save();
-        }
-        return res.status(400).json({ 
-          success: false, 
-          message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}, Requested: ${newQuantity}` 
-        });
-      }
-      
-      transaction.items[existingItemIndex].quantity = newQuantity;
-      transaction.items[existingItemIndex].totalPrice = newQuantity * transaction.items[existingItemIndex].unitPrice;
-    } else {
-      // Add new item to transaction
-      const newItem = {
-        ...itemData,
-        totalPrice: itemData.quantity * itemData.unitPrice
-      };
-      transaction.items.push(newItem);
-    }
-
-    // Recalculate totals for transaction
-    transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
-    transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
-    transaction.payment.amount = transaction.totalAmount;
-
-    // Save both cart and transaction
-    await transaction.save();
-    await cart.save();
-
-    console.log('✅ Cart and transaction updated successfully');
-
-    // Populate the transaction for response
-    const populatedTransaction = await Transaction.findById(transaction._id)
-      .populate('items.medicineId', 'name genericName form price');
-
-    // Get populated cart for response
-    const populatedCart = await cart.getPopulatedCart();
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Medicine added to cart successfully', 
-      data: {
-        transaction: populatedTransaction,
-        cart: populatedCart
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Add to cart error:', error);
-    console.error('❌ Error stack:', error.stack);
-    
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error adding to cart',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// Get cart - Returns both pending transaction and cart
-exports.getCart = async (req, res) => {
+// Get transaction statistics
+exports.getTransactionStats = async (req, res) => {
   try {
     const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { transactionType = 'sale' } = req.query;
+    const { startDate, endDate } = req.query;
 
-    let transaction = await Transaction.findOne({ 
+    let dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter.createdAt = {};
+      if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+      if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+    }
+
+    const matchStage = { 
       pharmacyId, 
-      transactionType, 
-      status: 'pending' 
-    }).populate('items.medicineId', 'name genericName form price');
-
-    let cart = await Cart.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'active' 
-    });
-
-    if (!transaction && !cart) {
-      return res.status(200).json({ 
-        success: true, 
-        data: { 
-          transaction: {
-            pharmacyId,
-            transactionType,
-            items: [], 
-            subtotal: 0,
-            tax: 0,
-            discount: 0,
-            totalAmount: 0,
-            status: 'pending'
-          },
-          cart: {
-            pharmacyId,
-            transactionType,
-            items: [],
-            totalAmount: 0,
-            totalItems: 0,
-            totalQuantity: 0,
-            status: 'active'
-          }
-        } 
-      });
-    }
-
-    let populatedCart = null;
-    if (cart) {
-      populatedCart = await cart.getPopulatedCart();
-    }
-
-    res.status(200).json({ 
-      success: true, 
-      data: {
-        transaction: transaction || null,
-        cart: populatedCart || null
-      }
-    });
-
-  } catch (error) {
-    console.error('Get cart error:', error);
-    res.status(500).json({ success: false, message: 'Error fetching cart' });
-  }
-};
-
-// Update cart item - Updates both transaction and cart item
-exports.updateCartItem = async (req, res) => {
-  try {
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { itemId } = req.params;
-    const { quantity, unitPrice } = req.body;
-
-    // Find pending transaction
-    const transaction = await Transaction.findOne({
-      pharmacyId,
-      status: 'pending',
-      'items._id': itemId
-    });
-
-    // Find cart
-    const cart = await Cart.findOne({
-      pharmacyId,
-      status: 'active'
-    });
-
-    if (!transaction && !cart) {
-      return res.status(404).json({ success: false, message: 'Cart item not found' });
-    }
-
-    // Update transaction item if exists
-    if (transaction) {
-      const itemIndex = transaction.items.findIndex(item => item._id.toString() === itemId);
-      if (itemIndex !== -1) {
-        const item = transaction.items[itemIndex];
-
-        // Validate stock if updating quantity for sale
-        if (quantity !== undefined && transaction.transactionType === 'sale') {
-          const medicine = await Medicine.findById(item.medicineId);
-          if (medicine && medicine.quantity < quantity) {
-            return res.status(400).json({ 
-              success: false, 
-              message: `Insufficient stock. Available: ${medicine.quantity}` 
-            });
-          }
-          transaction.items[itemIndex].quantity = parseInt(quantity);
-        }
-
-        if (unitPrice !== undefined) {
-          transaction.items[itemIndex].unitPrice = parseFloat(unitPrice);
-        }
-
-        // Recalculate item total
-        transaction.items[itemIndex].totalPrice = 
-          transaction.items[itemIndex].quantity * transaction.items[itemIndex].unitPrice;
-
-        // Recalculate transaction totals
-        transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
-        transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
-        
-        // ✅ FIXED: Update payment amount
-        transaction.payment.amount = transaction.totalAmount;
-
-        await transaction.save();
-      }
-    }
-
-    // Update cart item if exists
-    if (cart) {
-      const cartItemIndex = cart.items.findIndex(item => item._id.toString() === itemId);
-      if (cartItemIndex !== -1) {
-        if (quantity !== undefined) {
-          cart.items[cartItemIndex].quantity = parseInt(quantity);
-        }
-        if (unitPrice !== undefined) {
-          cart.items[cartItemIndex].unitPrice = parseFloat(unitPrice);
-        }
-        await cart.save();
-      }
-    }
-
-    const populatedTransaction = transaction ? await Transaction.findById(transaction._id)
-      .populate('items.medicineId', 'name genericName form price') : null;
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Cart item updated', 
-      data: populatedTransaction 
-    });
-
-  } catch (error) {
-    console.error('Update cart item error:', error);
-    res.status(500).json({ success: false, message: 'Error updating cart item' });
-  }
-};
-
-// Remove item from cart - Removes from both transaction and cart
-exports.removeFromCart = async (req, res) => {
-  try {
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { itemId } = req.params;
-
-    // Find and remove from transaction
-    const transaction = await Transaction.findOne({
-      pharmacyId,
-      status: 'pending',
-      'items._id': itemId
-    });
-
-    // Find and remove from cart
-    const cart = await Cart.findOne({
-      pharmacyId,
-      status: 'active'
-    });
-
-    if (!transaction && !cart) {
-      return res.status(404).json({ success: false, message: 'Cart item not found' });
-    }
-
-    // Remove from transaction
-    if (transaction) {
-      transaction.items = transaction.items.filter(item => item._id.toString() !== itemId);
-
-      // Recalculate totals
-      transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
-      transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
-      
-      // ✅ FIXED: Update payment amount
-      transaction.payment.amount = transaction.totalAmount;
-
-      // If no items left, delete the transaction
-      if (transaction.items.length === 0) {
-        await Transaction.findByIdAndDelete(transaction._id);
-      } else {
-        await transaction.save();
-      }
-    }
-
-    // Remove from cart
-    if (cart) {
-      cart.items = cart.items.filter(item => item._id.toString() !== itemId);
-      await cart.save();
-    }
-
-    // Response data
-    let responseData = null;
-    if (transaction && transaction.items.length > 0) {
-      const populatedTransaction = await Transaction.findById(transaction._id)
-        .populate('items.medicineId', 'name genericName form price');
-      responseData = populatedTransaction;
-    }
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Item removed from cart', 
-      data: responseData
-    });
-
-  } catch (error) {
-    console.error('Remove from cart error:', error);
-    res.status(500).json({ success: false, message: 'Error removing from cart' });
-  }
-};
-
-// Clear cart - Deletes both pending transaction and cart
-exports.clearCart = async (req, res) => {
-  try {
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { transactionType = 'sale' } = req.body;
-
-    // Clear transaction
-    const transaction = await Transaction.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'pending' 
-    });
-
-    if (transaction) {
-      await Transaction.findByIdAndDelete(transaction._id);
-    }
-
-    // Clear cart
-    const cart = await Cart.findOne({ 
-      pharmacyId, 
-      transactionType, 
-      status: 'active' 
-    });
-
-    if (cart) {
-      await cart.clearCart();
-    }
-
-    res.status(200).json({ success: true, message: 'Cart cleared successfully' });
-
-  } catch (error) {
-    console.error('Clear cart error:', error);
-    res.status(500).json({ success: false, message: 'Error clearing cart' });
-  }
-};
-
-// Checkout cart - Updates pending transaction to completed and marks cart as completed
-exports.checkoutCart = async (req, res) => {
-  try {
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { 
-      transactionType, 
-      description, 
-      customerName, 
-      customerPhone, 
-      paymentMethod, 
-      tax = 0, 
-      discount = 0 
-    } = req.body;
-
-    // Find pending transaction
-    const transaction = await Transaction.findOne({ 
-      pharmacyId, 
-      transactionType: transactionType || 'sale', 
-      status: 'pending' 
-    });
-
-    // Find active cart
-    const cart = await Cart.findOne({ 
-      pharmacyId, 
-      transactionType: transactionType || 'sale', 
-      status: 'active' 
-    });
-
-    if (!transaction) {
-      return res.status(400).json({ success: false, message: 'No pending transaction found' });
-    }
-
-    if (!transaction.items || transaction.items.length === 0) {
-      return res.status(400).json({ success: false, message: 'Transaction is empty' });
-    }
-
-    // Update transaction details
-    transaction.description = description || transaction.description;
-    transaction.customerInfo = {
-      name: customerName,
-      phone: customerPhone
-    };
-    transaction.payment.method = paymentMethod; // ✅ FIXED: Update payment method correctly
-    transaction.tax = tax;
-    transaction.discount = discount;
-    
-    // Recalculate total
-    transaction.totalAmount = Math.max(0, transaction.subtotal + tax - discount);
-    transaction.status = 'completed';
-    transaction.payment.amount = transaction.totalAmount; // ✅ FIXED: Update payment amount
-    transaction.payment.status = 'completed'; // ✅ FIXED: Update payment status
-
-    await transaction.save();
-
-    // Update cart status
-    if (cart) {
-      cart.status = 'completed';
-      cart.customerName = customerName;
-      cart.customerPhone = customerPhone;
-      cart.paymentMethod = paymentMethod;
-      await cart.save();
-    }
-
-    // Update stock for sale transactions
-    if (transaction.transactionType === 'sale') {
-      for (const item of transaction.items) {
-        await Medicine.findByIdAndUpdate(
-          item.medicineId, 
-          { $inc: { quantity: -item.quantity } }
-        );
-      }
-    }
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Checkout successful', 
-      data: transaction 
-    });
-
-  } catch (error) {
-    console.error('Checkout error:', error);
-    res.status(500).json({ success: false, message: 'Error during checkout' });
-  }
-};
-
-// Purchase single medicine from cart - Remove only specific item
-exports.purchaseSingleMedicine = async (req, res) => {
-  try {
-    const pharmacyId = req.user.pharmacyId || req.user._id;
-    const { itemId } = req.params;
-    const { customerName, customerPhone, paymentMethod } = req.body;
-
-    // Find pending transaction with the specific item
-    const transaction = await Transaction.findOne({
-      pharmacyId,
-      status: 'pending',
-      'items._id': itemId
-    });
-
-    // Find cart
-    const cart = await Cart.findOne({
-      pharmacyId,
-      status: 'active'
-    });
-
-    if (!transaction) {
-      return res.status(404).json({ success: false, message: 'Item not found in transaction' });
-    }
-
-    const itemIndex = transaction.items.findIndex(item => item._id.toString() === itemId);
-    const itemToPurchase = transaction.items[itemIndex];
-
-    // Create new completed transaction for single item
-    const transactionNumber = await generateTransactionNumber(transaction.transactionType);
-    
-    const completedTransaction = new Transaction({
-      pharmacyId,
-      transactionType: transaction.transactionType,
-      transactionNumber,
-      description: `Single item purchase: ${itemToPurchase.medicineName}`,
-      items: [itemToPurchase],
-      subtotal: itemToPurchase.totalPrice,
-      tax: 0,
-      discount: 0,
-      totalAmount: itemToPurchase.totalPrice,
-      customerInfo: {
-        name: customerName,
-        phone: customerPhone
-      },
-      // ✅ FIXED: Use correct payment structure
-      payment: {
-        method: paymentMethod,
-        amount: itemToPurchase.totalPrice,
-        status: 'completed'
-      },
       status: 'completed',
-      transactionDate: new Date(),
-      // ✅ FIXED: Add required fields
-      createdBy: req.user._id,
-      updatedBy: req.user._id
+      ...dateFilter
+    };
+
+    const stats = await Transaction.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: '$transactionType',
+          totalTransactions: { $sum: 1 },
+          totalRevenue: { $sum: '$totalAmount' },
+          averageTransaction: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    const totalStats = await Transaction.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: null,
+          totalTransactions: { $sum: 1 },
+          totalRevenue: { $sum: '$totalAmount' },
+          averageTransaction: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        byType: stats,
+        overall: totalStats[0] || {
+          totalTransactions: 0,
+          totalRevenue: 0,
+          averageTransaction: 0
+        }
+      }
     });
 
-    await completedTransaction.save();
+  } catch (error) {
+    console.error('Get transaction stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching transaction statistics'
+    });
+  }
+};
 
-    // Update stock for sale
-    if (transaction.transactionType === 'sale') {
-      await Medicine.findByIdAndUpdate(
-        itemToPurchase.medicineId,
-        { $inc: { quantity: -itemToPurchase.quantity } }
-      );
+// Export transactions (basic implementation)
+exports.exportTransactions = async (req, res) => {
+  try {
+    const { startDate, endDate, format = 'json' } = req.query;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+
+    let query = { pharmacyId, status: 'completed' };
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
     }
 
-    // Remove item from pending transaction
-    transaction.items.splice(itemIndex, 1);
-    
-    if (transaction.items.length === 0) {
-      // Delete empty transaction
-      await Transaction.findByIdAndDelete(transaction._id);
-    } else {
-      // Update remaining transaction totals
-      transaction.subtotal = transaction.items.reduce((sum, item) => sum + item.totalPrice, 0);
-      transaction.totalAmount = transaction.subtotal + transaction.tax - transaction.discount;
-      transaction.payment.amount = transaction.totalAmount; // ✅ FIXED: Update payment amount
-      await transaction.save();
-    }
+    const transactions = await Transaction.find(query)
+      .populate('items.medicineId', 'name genericName form')
+      .sort({ createdAt: -1 });
 
-    // Remove item from cart
-    if (cart) {
-      cart.items = cart.items.filter(item => item._id.toString() !== itemId);
-      await cart.save();
+    if (format === 'csv') {
+      // Basic CSV implementation
+      const csvData = transactions.map(transaction => ({
+        'Transaction Number': transaction.transactionNumber,
+        'Date': transaction.transactionDate,
+        'Type': transaction.transactionType,
+        'Customer': transaction.customerInfo?.name || 'N/A',
+        'Total Amount': transaction.totalAmount,
+        'Status': transaction.status
+      }));
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=transactions.csv');
+      // Implement CSV string conversion here
+      return res.send(JSON.stringify(csvData));
     }
 
     res.status(200).json({
       success: true,
-      message: 'Single medicine purchased successfully',
-      data: {
-        completedTransaction,
-        remainingTransaction: transaction.items.length > 0 ? transaction : null
+      data: transactions,
+      meta: {
+        total: transactions.length,
+        exportDate: new Date().toISOString()
       }
     });
 
   } catch (error) {
-    console.error('Purchase single medicine error:', error);
-    res.status(500).json({ success: false, message: 'Error purchasing single medicine' });
+    console.error('Export transactions error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while exporting transactions'
+    });
+  }
+};
+
+// Create a quick sale transaction (simplified version without cart)
+exports.createQuickSale = async (req, res) => {
+  try {
+    const {
+      items,
+      customerName = 'Walk-in Customer',
+      customerPhone = '',
+      paymentMethod = 'cash'
+    } = req.body;
+    
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Items array is required and cannot be empty'
+      });
+    }
+
+    // Generate transaction number
+    const transactionNumber = await generateTransactionNumber('sale');
+
+    // Validate items and prepare transaction items
+    const transactionItems = [];
+    let subtotal = 0;
+
+    for (const item of items) {
+      const medicine = await Medicine.findById(item.medicineId);
+      if (!medicine) {
+        return res.status(404).json({
+          success: false,
+          message: `Medicine with ID ${item.medicineId} not found`
+        });
+      }
+      
+      if (medicine.quantity < item.quantity) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}`
+        });
+      }
+      
+      const unitPrice = item.unitPrice || medicine.price;
+      const totalPrice = item.quantity * unitPrice;
+      
+      transactionItems.push({
+        medicineId: medicine._id,
+        medicineName: medicine.name,
+        genericName: medicine.genericName,
+        form: medicine.form,
+        packSize: medicine.packSize,
+        quantity: item.quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice,
+        expiryDate: medicine.expiryDate,
+        batchNumber: medicine.batchNumber,
+        manufacturer: medicine.manufacturer,
+        pharmacyId: pharmacyId
+      });
+
+      subtotal += totalPrice;
+    }
+
+    const totalAmount = Math.max(0, subtotal);
+
+    // Create transaction
+    const transactionData = {
+      pharmacyId,
+      userId,
+      transactionType: 'sale',
+      transactionNumber,
+      description: 'Quick Sale',
+      items: transactionItems,
+      subtotal,
+      tax: 0,
+      discount: 0,
+      totalAmount,
+      customerInfo: {
+        name: customerName,
+        phone: customerPhone
+      },
+      payment: {
+        method: paymentMethod,
+        amount: totalAmount,
+        status: 'completed'
+      },
+      status: 'completed',
+      transactionDate: new Date(),
+      createdBy: userId,
+      updatedBy: userId
+    };
+
+    const transaction = new Transaction(transactionData);
+    await transaction.save();
+
+    // Update stock
+    for (const item of items) {
+      await Medicine.findByIdAndUpdate(
+        item.medicineId, 
+        { $inc: { quantity: -item.quantity } }
+      );
+    }
+
+    // Populate the response
+    const populatedTransaction = await Transaction.findById(transaction._id)
+      .populate('items.medicineId', 'name genericName form price');
+
+    res.status(201).json({
+      success: true,
+      message: 'Quick sale completed successfully',
+      data: populatedTransaction
+    });
+
+  } catch (error) {
+    console.error('Quick sale error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing quick sale',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };

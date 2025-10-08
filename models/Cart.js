@@ -68,6 +68,24 @@ const cartItemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: false
+  },
+  // NEW FIELDS FOR TRANSACTION SELECTION
+  sourceTransactionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transaction'
+  },
+  sourceTransactionNumber: {
+    type: String,
+    trim: true
+  },
+  selectionType: {
+    type: String,
+    enum: ['full', 'partial'],
+    default: 'full'
+  },
+  isFromTransaction: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
@@ -86,28 +104,16 @@ cartItemSchema.pre('save', function(next) {
   next();
 });
 
-// Static method to calculate cart totals
-cartItemSchema.statics.calculateCartTotal = async function(cartId) {
-  const result = await this.aggregate([
-    { $match: { cartId: cartId } },
-    {
-      $group: {
-        _id: null,
-        totalAmount: { $sum: '$totalPrice' },
-        totalItems: { $sum: 1 },
-        totalQuantity: { $sum: '$quantity' }
-      }
-    }
-  ]);
-  
-  return result.length > 0 ? result[0] : { totalAmount: 0, totalItems: 0, totalQuantity: 0 };
-};
-
 const cartSchema = new mongoose.Schema({
   pharmacyId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: false
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
   transactionType: {
     type: String,
@@ -115,7 +121,7 @@ const cartSchema = new mongoose.Schema({
     enum: ['sale', 'purchase', 'return', 'adjustment'],
     default: 'sale'
   },
-  items: [cartItemSchema], // Embedded items for better performance
+  items: [cartItemSchema],
   totalAmount: {
     type: Number,
     default: 0,
@@ -197,6 +203,35 @@ const cartSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: 0
+  },
+  // NEW FIELDS FOR TRANSACTION TRACKING
+  sourceTransactionCount: {
+    type: Number,
+    default: 0
+  },
+  sourceTransactions: [{
+    transactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transaction'
+    },
+    transactionNumber: String,
+    transactionDate: Date,
+    selectionType: String, // 'full' or 'partial'
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  transactionSummary: {
+    totalSourceTransactions: {
+      type: Number,
+      default: 0
+    },
+    itemsFromTransactions: {
+      type: Number,
+      default: 0
+    },
+    lastTransactionAdded: Date
   }
 }, {
   timestamps: true
@@ -216,11 +251,18 @@ cartSchema.pre('save', function(next) {
   }
   
   this.finalAmount = this.totalAmount - discountValue + this.taxAmount;
+
+  // Update transaction summary
+  this.transactionSummary.totalSourceTransactions = this.sourceTransactions.length;
+  this.transactionSummary.itemsFromTransactions = this.items.filter(item => item.isFromTransaction).length;
+  this.transactionSummary.lastTransactionAdded = this.sourceTransactions.length > 0 
+    ? this.sourceTransactions[this.sourceTransactions.length - 1].addedAt 
+    : null;
   
   next();
 });
 
-// Method to add item to cart
+// Method to add item to cart with transaction info
 cartSchema.methods.addItem = async function(itemData) {
   const existingItemIndex = this.items.findIndex(
     item => item.medicineId.toString() === itemData.medicineId.toString()
@@ -231,13 +273,80 @@ cartSchema.methods.addItem = async function(itemData) {
     this.items[existingItemIndex].quantity += itemData.quantity;
     this.items[existingItemIndex].totalPrice = 
       this.items[existingItemIndex].quantity * this.items[existingItemIndex].unitPrice;
+    
+    // Update transaction info if provided
+    if (itemData.sourceTransactionId) {
+      this.items[existingItemIndex].sourceTransactionId = itemData.sourceTransactionId;
+      this.items[existingItemIndex].sourceTransactionNumber = itemData.sourceTransactionNumber;
+      this.items[existingItemIndex].selectionType = itemData.selectionType;
+      this.items[existingItemIndex].isFromTransaction = true;
+    }
   } else {
     // Add new item
-    this.items.push({
+    const newItem = {
       ...itemData,
       totalPrice: itemData.quantity * itemData.unitPrice,
       pharmacyId: this.pharmacyId
+    };
+
+    // Set transaction flags
+    if (itemData.sourceTransactionId) {
+      newItem.isFromTransaction = true;
+    }
+
+    this.items.push(newItem);
+  }
+
+  return this.save();
+};
+
+// Method to add items from transaction (full or partial)
+cartSchema.methods.addItemsFromTransaction = async function(transactionData, selectionType, selectedItems = []) {
+  const { transactionId, transactionNumber, items } = transactionData;
+  
+  let itemsToAdd = [];
+  
+  if (selectionType === 'full') {
+    // Add all items from transaction
+    itemsToAdd = items.map(item => ({
+      ...item.toObject ? item.toObject() : item,
+      sourceTransactionId: transactionId,
+      sourceTransactionNumber: transactionNumber,
+      selectionType: 'full',
+      isFromTransaction: true
+    }));
+  } else if (selectionType === 'partial') {
+    // Add only selected items
+    itemsToAdd = items
+      .filter(item => selectedItems.includes(item.medicineId.toString()))
+      .map(item => ({
+        ...item.toObject ? item.toObject() : item,
+        sourceTransactionId: transactionId,
+        sourceTransactionNumber: transactionNumber,
+        selectionType: 'partial',
+        isFromTransaction: true
+      }));
+  }
+
+  // Add items to cart
+  for (const itemData of itemsToAdd) {
+    await this.addItem(itemData);
+  }
+
+  // Record the source transaction
+  const existingSourceIndex = this.sourceTransactions.findIndex(
+    st => st.transactionId.toString() === transactionId
+  );
+
+  if (existingSourceIndex === -1) {
+    this.sourceTransactions.push({
+      transactionId,
+      transactionNumber,
+      transactionDate: new Date(),
+      selectionType,
+      addedAt: new Date()
     });
+    this.sourceTransactionCount = this.sourceTransactions.length;
   }
 
   return this.save();
@@ -245,6 +354,24 @@ cartSchema.methods.addItem = async function(itemData) {
 
 // Method to remove item from cart
 cartSchema.methods.removeItem = async function(itemId) {
+  const itemToRemove = this.items.id(itemId);
+  
+  if (itemToRemove && itemToRemove.isFromTransaction) {
+    // Check if this was the last item from a transaction
+    const transactionId = itemToRemove.sourceTransactionId;
+    const remainingItemsFromTransaction = this.items.filter(
+      item => item.sourceTransactionId && item.sourceTransactionId.toString() === transactionId.toString()
+    ).length;
+
+    if (remainingItemsFromTransaction === 1) { // This is the last item
+      // Remove from source transactions
+      this.sourceTransactions = this.sourceTransactions.filter(
+        st => st.transactionId.toString() !== transactionId.toString()
+      );
+      this.sourceTransactionCount = this.sourceTransactions.length;
+    }
+  }
+
   this.items = this.items.filter(item => item._id.toString() !== itemId);
   return this.save();
 };
@@ -270,7 +397,50 @@ cartSchema.methods.clearCart = async function() {
   this.totalAmount = 0;
   this.totalItems = 0;
   this.totalQuantity = 0;
+  this.sourceTransactions = [];
+  this.sourceTransactionCount = 0;
+  this.transactionSummary = {
+    totalSourceTransactions: 0,
+    itemsFromTransactions: 0,
+    lastTransactionAdded: null
+  };
   this.status = 'completed';
+  return this.save();
+};
+
+// Method to clear only transaction items
+cartSchema.methods.clearTransactionItems = async function() {
+  this.items = this.items.filter(item => !item.isFromTransaction);
+  
+  // Clear source transactions
+  this.sourceTransactions = [];
+  this.sourceTransactionCount = 0;
+  this.transactionSummary.itemsFromTransactions = 0;
+  this.transactionSummary.totalSourceTransactions = 0;
+  this.transactionSummary.lastTransactionAdded = null;
+  
+  return this.save();
+};
+
+// Method to get items by source transaction
+cartSchema.methods.getItemsByTransaction = function(transactionId) {
+  return this.items.filter(item => 
+    item.sourceTransactionId && item.sourceTransactionId.toString() === transactionId.toString()
+  );
+};
+
+// Method to remove all items from a specific transaction
+cartSchema.methods.removeTransactionItems = async function(transactionId) {
+  this.items = this.items.filter(item => 
+    !item.sourceTransactionId || item.sourceTransactionId.toString() !== transactionId.toString()
+  );
+  
+  // Remove from source transactions
+  this.sourceTransactions = this.sourceTransactions.filter(
+    st => st.transactionId.toString() !== transactionId.toString()
+  );
+  this.sourceTransactionCount = this.sourceTransactions.length;
+  
   return this.save();
 };
 
@@ -286,10 +456,18 @@ cartSchema.methods.setTax = async function(taxAmount) {
   return this.save();
 };
 
-// Method to get populated cart (populate medicine references if needed)
+// Method to get populated cart
 cartSchema.methods.getPopulatedCart = async function() {
-  // If you need to populate medicine details, you can do it here
-  const cart = await this.populate('items.medicineId', 'name genericName form price stockQuantity expiryDate batchNumber manufacturer');
+  const cart = await this.populate([
+    {
+      path: 'items.medicineId',
+      select: 'name genericName form price stockQuantity expiryDate batchNumber manufacturer'
+    },
+    {
+      path: 'sourceTransactions.transactionId',
+      select: 'transactionNumber transactionDate totalAmount items'
+    }
+  ]);
   return cart;
 };
 
@@ -322,16 +500,64 @@ cartSchema.statics.findAbandonedCarts = function(days = 1) {
   });
 };
 
+// Static method to find cart by user and transaction type
+cartSchema.statics.findActiveCart = function(userId, pharmacyId, transactionType = 'sale') {
+  return this.findOne({
+    userId,
+    pharmacyId,
+    transactionType,
+    status: 'active'
+  });
+};
+
+// Static method to get cart summary
+cartSchema.statics.getCartSummary = async function(userId, pharmacyId) {
+  const cart = await this.findOne({
+    userId,
+    pharmacyId,
+    status: 'active'
+  });
+
+  if (!cart) {
+    return {
+      totalItems: 0,
+      totalQuantity: 0,
+      totalAmount: 0,
+      sourceTransactionCount: 0
+    };
+  }
+
+  return {
+    totalItems: cart.totalItems,
+    totalQuantity: cart.totalQuantity,
+    totalAmount: cart.totalAmount,
+    sourceTransactionCount: cart.sourceTransactionCount,
+    transactionSummary: cart.transactionSummary
+  };
+};
+
 // Indexes for better performance
 cartSchema.index({ pharmacyId: 1, status: 1 });
+cartSchema.index({ userId: 1, status: 1 });
 cartSchema.index({ createdAt: 1 });
 cartSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 cartSchema.index({ 'items.medicineId': 1 });
 cartSchema.index({ lastActivity: 1 });
+cartSchema.index({ 'sourceTransactions.transactionId': 1 });
 
 // Virtual for cart age in hours
 cartSchema.virtual('ageInHours').get(function() {
   return Math.floor((new Date() - this.createdAt) / (1000 * 60 * 60));
+});
+
+// Virtual for transaction items count
+cartSchema.virtual('transactionItemsCount').get(function() {
+  return this.items.filter(item => item.isFromTransaction).length;
+});
+
+// Virtual for regular items count
+cartSchema.virtual('regularItemsCount').get(function() {
+  return this.items.filter(item => !item.isFromTransaction).length;
 });
 
 // Set toJSON transform to include virtuals
