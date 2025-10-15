@@ -1,5 +1,7 @@
 const Request = require('../models/Request');
 const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
 
 // Create a new medicine request
 exports.createMedicineRequest = async (req, res) => {
@@ -18,6 +20,10 @@ exports.createMedicineRequest = async (req, res) => {
 
     // Check if user has a pharmacyName
     if (!user.pharmacyName) {
+      // Clean up uploaded file if exists
+      if (req.file) {
+        fs.unlinkSync(req.file.path);
+      }
       return res.status(400).json({
         success: false,
         message: 'User is not associated with a pharmacy. Please update your pharmacy profile.'
@@ -61,6 +67,15 @@ exports.createMedicineRequest = async (req, res) => {
       data: newRequest
     });
   } catch (error) {
+    // Clean up uploaded file if there was an error
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (cleanupError) {
+        console.error('Error cleaning up file:', cleanupError);
+      }
+    }
+    
     console.error('Error creating medicine request:', error);
     res.status(500).json({
       success: false,

@@ -4,7 +4,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const { validateResult } = require('../middleware/validateResult');
 const { medicineRequestValidator } = require('../validators/requestValidator');
-const { uploadMedicineRequest } = require('../middleware/upload'); 
+const { uploadMedicineRequest, handleMulterError } = require('../middleware/upload'); 
 const {
   createMedicineRequest,
   getPharmacyMedicineRequests,
@@ -12,45 +12,12 @@ const {
   getMedicineRequestDetails
 } = require('../controllers/requestController');
 
-// Handle file upload errors
-const handleUploadError = (error, req, res, next) => {
-    if (error) {
-        if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({
-                success: false,
-                message: 'File too large. Maximum size is 5MB.'
-            });
-        }
-        if (error.code === 'LIMIT_FILE_COUNT') {
-            return res.status(400).json({
-                success: false,
-                message: 'Too many files uploaded.'
-            });
-        }
-        if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-            return res.status(400).json({
-                success: false,
-                message: 'Unexpected field name for file upload. Use "image" as field name.'
-            });
-        }
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
-    }
-    next();
-};
-
 // Medicine request routes
 router.post(
   '/medicine',
   authenticate,
-  (req, res, next) => {
-      uploadMedicineRequest.single('image')(req, res, (err) => {
-          if (err) return handleUploadError(err, req, res, next);
-          next();
-      });
-  },
+  uploadMedicineRequest, // Use the pre-configured middleware directly
+  handleMulterError, // Now this function is defined
   medicineRequestValidator,
   validateResult,
   createMedicineRequest

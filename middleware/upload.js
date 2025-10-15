@@ -17,6 +17,86 @@ const ensureUploadsDir = (subDir) => {
     }
 };
 
+// Enhanced error handling middleware
+const handleMulterError = (error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        switch (error.code) {
+            case 'LIMIT_FILE_SIZE':
+                return res.status(413).json({
+                    success: false,
+                    message: 'File too large. Maximum size is 5MB'
+                });
+            case 'LIMIT_FILE_COUNT':
+                return res.status(400).json({
+                    success: false,
+                    message: 'Too many files. Only one file allowed'
+                });
+            case 'LIMIT_UNEXPECTED_FILE':
+                return res.status(400).json({
+                    success: false,
+                    message: 'Unexpected field name for file upload'
+                });
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: 'File upload error occurred'
+                });
+        }
+    } else if (error) {
+        // Handle custom errors from fileFilter
+        return res.status(400).json({
+            success: false,
+            message: error.message
+        });
+    }
+    next(error);
+};
+
+// Optional: Cleanup function for failed uploads
+const cleanupUploadedFile = (req, res, next) => {
+    if (req.file && req.file.path) {
+        fs.unlink(req.file.path, (err) => {
+            if (err) console.error('Error cleaning up file:', err);
+        });
+    }
+    next();
+};
+
+// Configure storage for request images
+const requestStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        try {
+            const uploadDir = ensureUploadsDir('requests');
+            cb(null, uploadDir);
+        } catch (error) {
+            cb(error);
+        }
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.]/g, '-');
+        cb(null, 'request-' + uniqueSuffix + path.extname(safeFilename));
+    }
+});
+
+// File filter for request images (more permissive)
+const requestFileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image files are allowed'), false);
+    }
+};
+
+// Create multer instances
+const uploadRequestInstance = multer({
+    storage: requestStorage,
+    fileFilter: requestFileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    }
+});
+
 // Configure storage for licenses
 const licenseStorage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -51,11 +131,11 @@ const logoStorage = multer.diskStorage({
     }
 });
 
-// Configure storage for request images
-const requestStorage = multer.diskStorage({
+// Configure storage for profile images
+const profileStorage = multer.diskStorage({
     destination: function (req, file, cb) {
         try {
-            const uploadDir = ensureUploadsDir('requests');
+            const uploadDir = ensureUploadsDir('profiles');
             cb(null, uploadDir);
         } catch (error) {
             cb(error);
@@ -64,7 +144,7 @@ const requestStorage = multer.diskStorage({
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.]/g, '-');
-        cb(null, 'request-' + uniqueSuffix + path.extname(safeFilename));
+        cb(null, 'profile-' + uniqueSuffix + path.extname(safeFilename));
     }
 });
 
@@ -93,15 +173,6 @@ const imageFileFilter = (req, file, cb) => {
         cb(null, true);
     } else {
         cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WEBP, SVG)!'), false);
-    }
-};
-
-// File filter for request images (more permissive)
-const requestFileFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-        cb(null, true);
-    } else {
-        cb(new Error('Only image files are allowed'), false);
     }
 };
 
@@ -159,16 +230,16 @@ const pharmacyStorage = multer.diskStorage({
 });
 
 // Multer configurations
-const uploadLicense = multer({
+const uploadLicenseInstance = multer({
     storage: licenseStorage,
     fileFilter: imageFileFilter,
     limits: {
         fileSize: 5 * 1024 * 1024, // 5MB limit
-        files: 1 // Limit to single file upload
+        files: 1
     }
 });
 
-const uploadLogo = multer({
+const uploadLogoInstance = multer({
     storage: logoStorage,
     fileFilter: imageFileFilter,
     limits: {
@@ -177,15 +248,15 @@ const uploadLogo = multer({
     }
 });
 
-const uploadRequest = multer({
-    storage: requestStorage,
-    fileFilter: requestFileFilter,
+const uploadProfileInstance = multer({
+    storage: profileStorage,
+    fileFilter: imageFileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: 2 * 1024 * 1024 // 2MB limit
     }
 });
 
-const uploadSupport = multer({
+const uploadSupportInstance = multer({
     storage: supportStorage,
     fileFilter: supportFileFilter,
     limits: {
@@ -193,7 +264,7 @@ const uploadSupport = multer({
     }
 });
 
-// Backward compatible upload instance
+// Backward compatible upload instance - ADD THIS
 const upload = multer({
     storage: pharmacyStorage,
     fileFilter: pharmacyFileFilter,
@@ -203,86 +274,35 @@ const upload = multer({
     }
 });
 
-// Enhanced error handling middleware
-const handleMulterError = (error, req, res, next) => {
-    if (error instanceof multer.MulterError) {
-        switch (error.code) {
-            case 'LIMIT_FILE_SIZE':
-                return res.status(413).json({
-                    success: false,
-                    message: 'File too large. Maximum size is 5MB'
-                });
-            case 'LIMIT_FILE_COUNT':
-                return res.status(400).json({
-                    success: false,
-                    message: 'Too many files. Only one file allowed'
-                });
-            case 'LIMIT_UNEXPECTED_FILE':
-                return res.status(400).json({
-                    success: false,
-                    message: 'Unexpected field name for file upload'
-                });
-            default:
-                return res.status(400).json({
-                    success: false,
-                    message: 'File upload error occurred'
-                });
-        }
-    } else if (error) {
-        // Handle custom errors from fileFilter
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
-    }
-    next(error);
-};
-
-// Optional: Cleanup function for failed uploads
-const cleanupUploadedFile = (req, res, next) => {
-    if (req.file && req.file.path) {
-        fs.unlink(req.file.path, (err) => {
-            if (err) console.error('Error cleaning up file:', err);
-        });
-    }
-    next();
-};
-
-// Combined middleware for both files (license and logo)
-const uploadPharmacyFiles = (req, res, next) => {
-    // Use multer for both files
-    const licenseUpload = uploadLicense.single('license');
-    const logoUpload = uploadLogo.single('logo');
-    
-    licenseUpload(req, res, function(err) {
-        if (err) return next(err);
-        
-        logoUpload(req, res, function(err) {
-            if (err) return next(err);
-            next();
-        });
-    });
-};
-
 // Backward compatibility - pharmacyUpload for licenseImage and logo fields
 const pharmacyUpload = upload.fields([
     { name: 'licenseImage', maxCount: 1 },
     { name: 'logo', maxCount: 1 }
 ]);
 
+// Export both instances and configured middlewares
 module.exports = { 
-    // New enhanced uploads
-    uploadPharmacyFiles,
-    uploadLicense: uploadLicense.single('license'),
-    uploadLogo: uploadLogo.single('logo'),
-    uploadRequest: uploadRequest.single('image'),
-    uploadMedicineRequest: uploadRequest.single('image'),
-    uploadSupport: uploadSupport.single('attachment'),
-    uploadSupportArray: uploadSupport.array('attachments',5),
+    // Multer instances (for flexibility)
+    uploadRequestInstance,
+    uploadLicenseInstance,
+    uploadLogoInstance,
+    uploadProfileInstance,
+    uploadSupportInstance,
+    
+    // Pre-configured middleware functions (for direct use)
+    uploadRequest: uploadRequestInstance.single('image'),
+    uploadLicense: uploadLicenseInstance.single('license'),
+    uploadLogo: uploadLogoInstance.single('logo'),
+    uploadProfile: uploadProfileInstance.single('profileImage'),
+    uploadSupport: uploadSupportInstance.single('attachment'),
+    uploadSupportArray: uploadSupportInstance.array('attachments', 5),
+    uploadMedicineRequest: uploadRequestInstance.single('image'),
+
+    // Error handling and utility functions
     handleMulterError, 
     cleanupUploadedFile,
     
-    // Backward compatibility
+    // Backward compatibility exports - ADD THESE
     upload,
     pharmacyUpload
 };
