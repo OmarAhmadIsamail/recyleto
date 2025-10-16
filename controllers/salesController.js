@@ -1,99 +1,291 @@
-const Transaction = require('../models/Transaction');
-const Medicine = require('../models/Medicine');
-const Cart = require('../models/Cart');
 const mongoose = require('mongoose');
-const { generateTransactionNumber } = require('../utils/helpers');
+const Sale = require('../models/Sale');
+const Medicine = require('../models/Medicine');
+const Transaction = require('../models/Transaction');
+const Receipt = require('../models/Receipt');
+const Refund = require('../models/Refund');
 
-const salesController = {
-  // Get sales dashboard data
-  getSalesDashboard: async (req, res) => {
-    try {
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const { period = 'today', startDate, endDate } = req.query;
+/**
+ * GET /sales - Show all medicines, transactions, receipts, and purchases
+ */
+const getAllSalesData = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { page = 1, limit = 20 } = req.query;
 
-      // Date range calculation
-      let dateFilter = {};
-      const now = new Date();
-      
-      switch (period) {
-        case 'today':
-          dateFilter = {
-            createdAt: {
-              $gte: new Date(now.setHours(0, 0, 0, 0)),
-              $lte: new Date(now.setHours(23, 59, 59, 999))
-            }
-          };
-          break;
-        case 'week':
-          const weekStart = new Date(now.setDate(now.getDate() - now.getDay()));
-          dateFilter = {
-            createdAt: {
-              $gte: new Date(weekStart.setHours(0, 0, 0, 0)),
-              $lte: new Date()
-            }
-          };
-          break;
-        case 'month':
-          const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-          dateFilter = {
-            createdAt: {
-              $gte: monthStart,
-              $lte: new Date()
-            }
-          };
-          break;
-        case 'custom':
-          if (startDate && endDate) {
-            dateFilter = {
-              createdAt: {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-              }
-            };
-          }
-          break;
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Get all data in parallel
+    const [
+      medicines,
+      transactions,
+      receipts,
+      sales,
+      refunds
+    ] = await Promise.all([
+      // All medicines
+      Medicine.find({ pharmacyId: pharmacyObjectId })
+        .select('name _id quantity price costPrice manufacturer form')
+        .lean(),
+
+      // All transactions
+      Transaction.find({ pharmacyId: pharmacyObjectId })
+        .select('transactionNumber _id transactionType status totalAmount checkoutDate')
+        .sort({ checkoutDate: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .lean(),
+
+      // All receipts
+      Receipt.find({ pharmacyId: pharmacyObjectId })
+        .select('receiptNumber _id receiptDate transactionId totalAmount customerInfo')
+        .sort({ receiptDate: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .lean(),
+
+      // All sales with purchases
+      Sale.find({ pharmacyId: pharmacyObjectId })
+        .select('transactionId transactionNumber receiptNumber items totalAmount transactionDate status')
+        .sort({ transactionDate: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .lean(),
+
+      // All refunds
+      Refund.find({ pharmacyId: pharmacyObjectId })
+        .select('refundNumber receiptNumber transactionNumber refundAmount status refundReason createdAt')
+        .sort({ createdAt: -1 })
+        .lean()
+    ]);
+
+    // Format the data
+    const formattedData = {
+      medicines: medicines.map(med => ({
+        medicineId: med._id,
+        medicineName: med.name,
+        quantity: med.quantity,
+        price: med.price,
+        costPrice: med.costPrice,
+        manufacturer: med.manufacturer,
+        form: med.form
+      })),
+
+      transactions: transactions.map(trans => ({
+        transactionId: trans._id,
+        transactionNumber: trans.transactionNumber,
+        transactionType: trans.transactionType,
+        status: trans.status,
+        totalAmount: trans.totalAmount,
+        checkoutDate: trans.checkoutDate
+      })),
+
+      receipts: receipts.map(receipt => ({
+        receiptId: receipt._id,
+        receiptNumber: receipt.receiptNumber,
+        transactionId: receipt.transactionId,
+        receiptDate: receipt.receiptDate,
+        totalAmount: receipt.totalAmount,
+        customerName: receipt.customerInfo?.name || 'N/A'
+      })),
+
+      purchases: sales.flatMap(sale => 
+        sale.items.map(item => ({
+          transactionNumber: sale.transactionNumber,
+          receiptNumber: sale.receiptNumber,
+          medicineId: item.medicineId,
+          medicineName: item.medicineName,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+          purchaseDate: sale.transactionDate,
+          status: sale.status
+        }))
+      ),
+
+      refunds: refunds.map(refund => ({
+        refundNumber: refund.refundNumber,
+        receiptNumber: refund.receiptNumber,
+        transactionNumber: refund.transactionNumber,
+        refundAmount: refund.refundAmount,
+        status: refund.status,
+        refundReason: refund.refundReason,
+        createdAt: refund.createdAt
+      }))
+    };
+
+    // Get counts for pagination
+    const [
+      medicinesCount,
+      transactionsCount,
+      receiptsCount,
+      salesCount,
+      refundsCount
+    ] = await Promise.all([
+      Medicine.countDocuments({ pharmacyId: pharmacyObjectId }),
+      Transaction.countDocuments({ pharmacyId: pharmacyObjectId }),
+      Receipt.countDocuments({ pharmacyId: pharmacyObjectId }),
+      Sale.countDocuments({ pharmacyId: pharmacyObjectId }),
+      Refund.countDocuments({ pharmacyId: pharmacyObjectId })
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: formattedData,
+      pagination: {
+        current: parseInt(page),
+        pages: Math.ceil(Math.max(medicinesCount, transactionsCount, receiptsCount, salesCount) / limit),
+        totals: {
+          medicines: medicinesCount,
+          transactions: transactionsCount,
+          receipts: receiptsCount,
+          sales: salesCount,
+          refunds: refundsCount
+        }
       }
+    });
+  } catch (error) {
+    console.error('Get all sales data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching sales data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 
-      // Sales statistics
-      const salesStats = await Transaction.aggregate([
+/**
+ * GET /sales/analysis - Show analysis of medicines, transactions, and refund requests
+ */
+const getSalesAnalysis = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { period = 'all' } = req.query; // all, today, week, month, year
+
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Date filters based on period
+    const dateFilter = getDateFilter(period);
+
+    // Get all analysis data in parallel
+    const [
+      medicineAnalysis,
+      transactionAnalysis,
+      refundAnalysis,
+      salesTrend,
+      topMedicines,
+      revenueAnalysis
+    ] = await Promise.all([
+      // Medicine Analysis
+      Medicine.aggregate([
+        { $match: { pharmacyId: pharmacyObjectId } },
+        {
+          $group: {
+            _id: null,
+            totalMedicines: { $sum: 1 },
+            totalStock: { $sum: '$quantity' },
+            lowStock: {
+              $sum: {
+                $cond: [{ $lte: ['$quantity', 10] }, 1, 0]
+              }
+            },
+            outOfStock: {
+              $sum: {
+                $cond: [{ $eq: ['$quantity', 0] }, 1, 0]
+              }
+            },
+            averagePrice: { $avg: '$price' },
+            totalInventoryValue: {
+              $sum: { $multiply: ['$quantity', '$price'] }
+            }
+          }
+        }
+      ]),
+
+      // Transaction Analysis
+      Transaction.aggregate([
         {
           $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
-            status: 'completed',
-            ...dateFilter
+            pharmacyId: pharmacyObjectId,
+            ...(dateFilter && { checkoutDate: dateFilter })
           }
         },
         {
           $group: {
             _id: null,
-            totalSales: { $sum: '$totalAmount' },
             totalTransactions: { $sum: 1 },
-            averageSale: { $avg: '$totalAmount' },
-            totalItemsSold: { $sum: { $sum: '$items.quantity' } }
+            completedTransactions: {
+              $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+            },
+            pendingTransactions: {
+              $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+            },
+            totalRevenue: { $sum: '$totalAmount' },
+            averageTransactionValue: { $avg: '$totalAmount' }
           }
         }
-      ]);
+      ]),
 
-      // Recent transactions
-      const recentTransactions = await Transaction.find({
-        pharmacyId,
-        transactionType: 'sale',
-        status: 'completed'
-      })
-      .populate('items.medicineId', 'name genericName')
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .select('transactionNumber totalAmount items customerInfo createdAt');
-
-      // Top selling medicines
-      const topMedicines = await Transaction.aggregate([
+      // Refund Analysis
+      Refund.aggregate([
         {
           $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
-            status: 'completed',
-            ...dateFilter
+            pharmacyId: pharmacyObjectId,
+            ...(dateFilter && { createdAt: dateFilter })
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalRefundRequests: { $sum: 1 },
+            pendingRefunds: {
+              $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+            },
+            approvedRefunds: {
+              $sum: { $cond: [{ $eq: ['$status', 'approved'] }, 1, 0] }
+            },
+            completedRefunds: {
+              $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+            },
+            rejectedRefunds: {
+              $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] }
+            },
+            totalRefundAmount: { $sum: '$refundAmount' },
+            averageRefundAmount: { $avg: '$refundAmount' }
+          }
+        }
+      ]),
+
+      // Sales Trend
+      Sale.aggregate([
+        {
+          $match: {
+            pharmacyId: pharmacyObjectId,
+            ...(dateFilter && { transactionDate: dateFilter })
+          }
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: '$transactionDate' },
+              month: { $month: '$transactionDate' },
+              day: { $dayOfMonth: '$transactionDate' }
+            },
+            dailySales: { $sum: 1 },
+            dailyRevenue: { $sum: '$totalAmount' },
+            date: { $first: '$transactionDate' }
+          }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } },
+        { $limit: 30 }
+      ]),
+
+      // Top Medicines
+      Sale.aggregate([
+        {
+          $match: {
+            pharmacyId: pharmacyObjectId,
+            ...(dateFilter && { transactionDate: dateFilter })
           }
         },
         { $unwind: '$items' },
@@ -102,538 +294,560 @@ const salesController = {
             _id: '$items.medicineId',
             medicineName: { $first: '$items.medicineName' },
             totalSold: { $sum: '$items.quantity' },
-            totalRevenue: { $sum: '$items.totalPrice' }
+            totalRevenue: { $sum: '$items.totalPrice' },
+            saleCount: { $sum: 1 }
           }
         },
         { $sort: { totalSold: -1 } },
-        { $limit: 5 }
-      ]);
+        { $limit: 10 }
+      ]),
 
-      // Sales by hour (for today)
-      const salesByHour = await Transaction.aggregate([
+      // Revenue Analysis by Payment Method
+      Transaction.aggregate([
         {
           $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
+            pharmacyId: pharmacyObjectId,
             status: 'completed',
-            createdAt: {
-              $gte: new Date(new Date().setHours(0, 0, 0, 0)),
-              $lte: new Date()
-            }
+            ...(dateFilter && { checkoutDate: dateFilter })
           }
         },
         {
           $group: {
-            _id: { $hour: '$createdAt' },
-            totalSales: { $sum: '$totalAmount' },
-            count: { $sum: 1 }
+            _id: '$payment.method',
+            totalRevenue: { $sum: '$totalAmount' },
+            transactionCount: { $sum: 1 },
+            averageValue: { $avg: '$totalAmount' }
           }
         },
-        { $sort: { _id: 1 } }
-      ]);
+        { $sort: { totalRevenue: -1 } }
+      ])
+    ]);
 
-      const stats = salesStats[0] || {
-        totalSales: 0,
-        totalTransactions: 0,
-        averageSale: 0,
-        totalItemsSold: 0
-      };
-
-      res.status(200).json({
-        success: true,
-        data: {
-          overview: {
-            totalSales: stats.totalSales,
-            totalTransactions: stats.totalTransactions,
-            averageSale: Math.round(stats.averageSale * 100) / 100,
-            totalItemsSold: stats.totalItemsSold
-          },
-          recentTransactions,
-          topMedicines,
-          salesByHour,
-          period
-        }
-      });
-
-    } catch (error) {
-      console.error('Sales dashboard error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching sales dashboard data'
-      });
-    }
-  },
-
-  // Process full sale (entire cart)
-  processFullSale: async (req, res) => {
-    try {
-      if (!req.user || !req.user._id) return res.status(401).json({ success: false, message: 'Unauthorized' });
-
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const {
-        customerName,
-        customerPhone,
-        paymentMethod,
-        tax = 0,
-        discount = 0,
-        deliveryOption = 'pickup',
-        deliveryAddressId,
-        description = 'Full sale transaction'
-      } = req.body;
-
-      // Get active cart
-      const cart = await Cart.findOne({
-        pharmacyId,
-        status: 'active'
-      });
-
-      if (!cart || !cart.items.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cart is empty'
-        });
-      }
-
-      // Validate stock and prepare transaction items
-      const transactionItems = [];
-      for (const cartItem of cart.items) {
-        const medicine = await Medicine.findById(cartItem.medicineId);
-        if (!medicine) {
-          return res.status(404).json({
-            success: false,
-            message: `Medicine ${cartItem.medicineName} not found`
-          });
-        }
-
-        if (medicine.quantity < cartItem.quantity) {
-          return res.status(400).json({
-            success: false,
-            message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}`
-          });
-        }
-
-        transactionItems.push({
-          medicineId: medicine._id,
-          medicineName: medicine.name,
-          genericName: medicine.genericName,
-          form: medicine.form,
-          packSize: medicine.packSize,
-          quantity: cartItem.quantity,
-          unitPrice: cartItem.unitPrice,
-          totalPrice: cartItem.totalPrice,
-          expiryDate: medicine.expiryDate,
-          batchNumber: medicine.batchNumber,
-          manufacturer: medicine.manufacturer
-        });
-      }
-
-      // Calculate totals
-      const subtotal = transactionItems.reduce((sum, item) => sum + item.totalPrice, 0);
-      const deliveryFee = deliveryOption === 'delivery' ? 5.00 : 0;
-      const totalAmount = Math.max(0, subtotal + tax + deliveryFee - discount);
-
-      // Generate transaction numbers
-      const transactionNumber = await generateTransactionNumber('sale');
-      const transactionRef = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
-
-      // Create transaction (full sale)
-      const paymentStatusFull = 'pending'; // mark pending by default; update later when payment confirmed
-
-      const transactionDataFull = {
-        pharmacyId,
-        transactionType: 'sale',
-        transactionNumber,
-        transactionRef,
-        description,
-        items: transactionItems,
-        subtotal,
-        tax,
-        discount,
-        deliveryFee,
-        totalAmount,
-        // audit / required fields
-        createdBy: req.user && req.user._id ? req.user._id : undefined,
-        // payment object
-        payment: {
-          method: paymentMethod || 'cash',
-          amount: totalAmount,
-          status: paymentStatusFull
-        },
-        customerInfo: {
-          name: customerName,
-          phone: customerPhone
-        },
-        paymentMethod,
-        deliveryOption,
-        status: 'completed',
-        saleType: 'full',
-        transactionDate: new Date()
-      };
-
-      // Only set deliveryStatus/deliveryAddress if delivery option
-      if (deliveryOption === 'delivery') {
-        transactionDataFull.deliveryStatus = 'pending';
-        if (deliveryAddressId) transactionDataFull.deliveryAddress = deliveryAddressId;
-      }
-
-      const transaction = new Transaction(transactionDataFull);
-
-      await transaction.save();
-
-      // Update stock
-      for (const item of transactionItems) {
-        await Medicine.findByIdAndUpdate(
-          item.medicineId,
-          { $inc: { quantity: -item.quantity } }
-        );
-      }
-
-      // Clear cart
-      await cart.clearCart();
-
-      // Populate response
-      const populatedTransaction = await Transaction.findById(transaction._id)
-        .populate('items.medicineId', 'name genericName form price')
-        .populate('deliveryAddress');
-
-      res.status(201).json({
-        success: true,
-        message: 'Full sale completed successfully',
-        data: populatedTransaction
-      });
-
-    } catch (error) {
-      console.error('Full sale error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing full sale'
-      });
-    }
-  },
-
-  // Process per-medicine sale (individual items)
-  processPerMedicineSale: async (req, res) => {
-    try {
-      if (!req.user || !req.user._id) return res.status(401).json({ success: false, message: 'Unauthorized' });
-
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const {
-        items, // Array of { medicineId, quantity, unitPrice (optional) }
-        customerName,
-        customerPhone,
-        paymentMethod,
-        tax = 0,
-        discount = 0,
-        deliveryOption = 'pickup',
-        deliveryAddressId,
-        description = 'Per medicine sale'
-      } = req.body;
-
-      if (!items || !items.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'No items provided for sale'
-        });
-      }
-
-      // Validate items and prepare transaction items
-      const transactionItems = [];
-      for (const item of items) {
-        const medicine = await Medicine.findById(item.medicineId);
-        if (!medicine) {
-          return res.status(404).json({
-            success: false,
-            message: `Medicine with ID ${item.medicineId} not found`
-          });
-        }
-
-        if (medicine.quantity < item.quantity) {
-          return res.status(400).json({
-            success: false,
-            message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}`
-          });
-        }
-
-        const unitPrice = item.unitPrice || medicine.price;
-        const totalPrice = item.quantity * unitPrice;
-
-        transactionItems.push({
-          medicineId: medicine._id,
-          medicineName: medicine.name,
-          genericName: medicine.genericName,
-          form: medicine.form,
-          packSize: medicine.packSize,
-          quantity: item.quantity,
-          unitPrice: unitPrice,
-          totalPrice: totalPrice,
-          expiryDate: medicine.expiryDate,
-          batchNumber: medicine.batchNumber,
-          manufacturer: medicine.manufacturer
-        });
-      }
-
-      // Calculate totals
-      const subtotal = transactionItems.reduce((sum, item) => sum + item.totalPrice, 0);
-      const deliveryFee = deliveryOption === 'delivery' ? 5.00 : 0;
-      const totalAmount = Math.max(0, subtotal + tax + deliveryFee - discount);
-
-      // Generate transaction numbers
-      const transactionNumber = await generateTransactionNumber('sale');
-      const transactionRef = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
-
-      // Create transaction (per-medicine) — ensure required fields exist
-      const paymentStatus = 'pending'; // mark pending by default; update later when payment confirmed
-
-      const transactionData = {
-        pharmacyId,
-        transactionType: 'sale',
-        transactionNumber,
-        transactionRef,
-        description,
-        items: transactionItems,
-        subtotal,
-        tax,
-        discount,
-        deliveryFee,
-        totalAmount,
-        // audit / required fields
-        createdBy: req.user && req.user._id ? req.user._id : undefined,
-        // payment object to satisfy schema requirement
-        payment: {
-          method: paymentMethod || 'cash',
-          amount: totalAmount,
-          status: paymentStatus
-        },
-        customerInfo: {
-          name: customerName,
-          phone: customerPhone
-        },
-        paymentMethod,
-        deliveryOption,
-        status: 'completed',
-        saleType: 'per_medicine',
-        transactionDate: new Date()
-      };
-
-      // Only set deliveryStatus/deliveryAddress if delivery option
-      if (deliveryOption === 'delivery') {
-        transactionData.deliveryStatus = 'pending';
-        if (deliveryAddressId) transactionData.deliveryAddress = deliveryAddressId;
-      }
-
-      const transaction = new Transaction(transactionData);
-
-      await transaction.save();
-
-      // Update stock
-      for (const item of transactionItems) {
-        await Medicine.findByIdAndUpdate(
-          item.medicineId,
-          { $inc: { quantity: -item.quantity } }
-        );
-      }
-
-      // Populate response
-      const populatedTransaction = await Transaction.findById(transaction._id)
-        .populate('items.medicineId', 'name genericName form price')
-        .populate('deliveryAddress');
-
-      res.status(201).json({
-        success: true,
-        message: 'Per-medicine sale completed successfully',
-        data: populatedTransaction
-      });
-
-    } catch (error) {
-      console.error('Per medicine sale error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing per-medicine sale'
-      });
-    }
-  },
-
-  // Get sales transactions with filtering
-  getSalesTransactions: async (req, res) => {
-    try {
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const {
-        search,
-        startDate,
-        endDate,
-        status,
-        saleType,
-        paymentMethod,
-        page = 1,
-        limit = 10
-      } = req.query;
-
-      let query = {
-        pharmacyId,
-        transactionType: 'sale'
-      };
-
-      // Search functionality
-      if (search) {
-        query.$or = [
-          { transactionNumber: new RegExp(search, 'i') },
-          { transactionRef: new RegExp(search, 'i') },
-          { description: new RegExp(search, 'i') },
-          { 'customerInfo.name': new RegExp(search, 'i') },
-          { 'customerInfo.phone': new RegExp(search, 'i') },
-          { 'items.medicineName': new RegExp(search, 'i') }
-        ];
-      }
-
-      // Date filter
-      if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) query.createdAt.$lte = new Date(endDate);
-      }
-
-      // Additional filters
-      if (status) query.status = status;
-      if (saleType) query.saleType = saleType;
-      if (paymentMethod) query.paymentMethod = paymentMethod;
-
-      const skip = (page - 1) * limit;
-
-      const transactions = await Transaction.find(query)
-        .populate('items.medicineId', 'name genericName form')
-        .populate('deliveryAddress')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .select('-__v');
-
-      const total = await Transaction.countDocuments(query);
-
-      res.status(200).json({
-        success: true,
-        data: transactions,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          pages: Math.ceil(total / limit)
-        }
-      });
-
-    } catch (error) {
-      console.error('Get sales transactions error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching sales transactions'
-      });
-    }
-  },
-
-  // Get sale statistics
-  getSaleStatistics: async (req, res) => {
-    try {
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const { period = 'month' } = req.query;
-
-      // Calculate date range
-      const now = new Date();
-      let startDate;
+    // Format the analysis data
+    const analysisData = {
+      period: period,
+      dateRange: dateFilter,
       
-      switch (period) {
-        case 'today':
-          startDate = new Date(now.setHours(0, 0, 0, 0));
-          break;
-        case 'week':
-          startDate = new Date(now.setDate(now.getDate() - 7));
-          break;
-        case 'month':
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          break;
-        case 'year':
-          startDate = new Date(now.getFullYear(), 0, 1);
-          break;
-        default:
-          startDate = new Date(now.setDate(now.getDate() - 30)); // Default to 30 days
+      medicines: {
+        total: medicineAnalysis[0]?.totalMedicines || 0,
+        totalStock: medicineAnalysis[0]?.totalStock || 0,
+        lowStock: medicineAnalysis[0]?.lowStock || 0,
+        outOfStock: medicineAnalysis[0]?.outOfStock || 0,
+        averagePrice: Math.round(medicineAnalysis[0]?.averagePrice || 0),
+        inventoryValue: Math.round(medicineAnalysis[0]?.totalInventoryValue || 0)
+      },
+
+      transactions: {
+        total: transactionAnalysis[0]?.totalTransactions || 0,
+        completed: transactionAnalysis[0]?.completedTransactions || 0,
+        pending: transactionAnalysis[0]?.pendingTransactions || 0,
+        totalRevenue: Math.round(transactionAnalysis[0]?.totalRevenue || 0),
+        averageValue: Math.round(transactionAnalysis[0]?.averageTransactionValue || 0)
+      },
+
+      refunds: {
+        totalRequests: refundAnalysis[0]?.totalRefundRequests || 0,
+        pending: refundAnalysis[0]?.pendingRefunds || 0,
+        approved: refundAnalysis[0]?.approvedRefunds || 0,
+        completed: refundAnalysis[0]?.completedRefunds || 0,
+        rejected: refundAnalysis[0]?.rejectedRefunds || 0,
+        totalAmount: Math.round(refundAnalysis[0]?.totalRefundAmount || 0),
+        averageAmount: Math.round(refundAnalysis[0]?.averageRefundAmount || 0)
+      },
+
+      performance: {
+        conversionRate: transactionAnalysis[0]?.totalTransactions ? 
+          (transactionAnalysis[0].completedTransactions / transactionAnalysis[0].totalTransactions * 100).toFixed(1) : 0,
+        refundRate: transactionAnalysis[0]?.totalRevenue ? 
+          (refundAnalysis[0]?.totalRefundAmount / transactionAnalysis[0].totalRevenue * 100).toFixed(1) : 0,
+        stockHealth: medicineAnalysis[0]?.totalMedicines ? 
+          ((medicineAnalysis[0].totalMedicines - medicineAnalysis[0].outOfStock) / medicineAnalysis[0].totalMedicines * 100).toFixed(1) : 0
+      },
+
+      insights: {
+        salesTrend: salesTrend,
+        topMedicines: topMedicines,
+        revenueByPayment: revenueAnalysis
       }
+    };
 
-      // Sales trend data
-      const salesTrend = await Transaction.aggregate([
-        {
-          $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
-            status: 'completed',
-            createdAt: { $gte: startDate }
-          }
-        },
-        {
-          $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
-            },
-            totalSales: { $sum: '$totalAmount' },
-            transactionCount: { $sum: 1 }
-          }
-        },
-        { $sort: { _id: 1 } }
-      ]);
-
-      // Payment method distribution
-      const paymentDistribution = await Transaction.aggregate([
-        {
-          $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
-            status: 'completed',
-            createdAt: { $gte: startDate }
-          }
-        },
-        {
-          $group: {
-            _id: '$paymentMethod',
-            totalAmount: { $sum: '$totalAmount' },
-            count: { $sum: 1 }
-          }
-        }
-      ]);
-
-      // Sale type distribution
-      const saleTypeDistribution = await Transaction.aggregate([
-        {
-          $match: {
-            pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-            transactionType: 'sale',
-            status: 'completed',
-            createdAt: { $gte: startDate }
-          }
-        },
-        {
-          $group: {
-            _id: '$saleType',
-            totalAmount: { $sum: '$totalAmount' },
-            count: { $sum: 1 }
-          }
-        }
-      ]);
-
-      res.status(200).json({
-        success: true,
-        data: {
-          salesTrend,
-          paymentDistribution,
-          saleTypeDistribution,
-          period
-        }
-      });
-
-    } catch (error) {
-      console.error('Sale statistics error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching sale statistics'
-      });
-    }
+    res.status(200).json({
+      success: true,
+      data: analysisData
+    });
+  } catch (error) {
+    console.error('Get sales analysis error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching sales analysis',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
-module.exports = salesController;
+/**
+ * GET /sales/transaction - Show transactions and the most used ones
+ */
+const getTransactionsWithUsage = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { page = 1, limit = 20 } = req.query;
+
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Get all transactions
+    const transactions = await Transaction.find({ pharmacyId: pharmacyObjectId })
+      .select('transactionNumber _id transactionType status totalAmount checkoutDate payment customerInfo')
+      .sort({ checkoutDate: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .lean();
+
+    // Get most used transactions (by frequency and value)
+    const mostUsedByValue = await Transaction.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId,
+          status: 'completed'
+        }
+      },
+      {
+        $group: {
+          _id: '$transactionNumber',
+          transactionId: { $first: '$_id' },
+          totalAmount: { $first: '$totalAmount' },
+          checkoutDate: { $first: '$checkoutDate' },
+          customerName: { $first: '$customerInfo.name' },
+          paymentMethod: { $first: '$payment.method' },
+          usageCount: { $sum: 1 }
+        }
+      },
+      { $sort: { totalAmount: -1 } },
+      { $limit: 10 }
+    ]);
+
+    const mostUsedByFrequency = await Transaction.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId
+        }
+      },
+      {
+        $group: {
+          _id: '$transactionNumber',
+          transactionId: { $first: '$_id' },
+          totalAmount: { $first: '$totalAmount' },
+          checkoutDate: { $first: '$checkoutDate' },
+          customerName: { $first: '$customerInfo.name' },
+          usageCount: { $sum: 1 }
+        }
+      },
+      { $sort: { usageCount: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Get transaction statistics
+    const transactionStats = await Transaction.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalTransactions: { $sum: 1 },
+          totalRevenue: { $sum: '$totalAmount' },
+          averageTransactionValue: { $avg: '$totalAmount' },
+          completedTransactions: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          pendingTransactions: {
+            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+
+    const total = await Transaction.countDocuments({ pharmacyId: pharmacyObjectId });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        allTransactions: transactions.map(trans => ({
+          transactionId: trans._id,
+          transactionNumber: trans.transactionNumber,
+          transactionType: trans.transactionType,
+          status: trans.status,
+          totalAmount: trans.totalAmount,
+          checkoutDate: trans.checkoutDate,
+          paymentMethod: trans.payment?.method,
+          customerName: trans.customerInfo?.name || 'Walk-in Customer'
+        })),
+        mostUsedByValue: mostUsedByValue,
+        mostUsedByFrequency: mostUsedByFrequency,
+        statistics: transactionStats[0] || {
+          totalTransactions: 0,
+          totalRevenue: 0,
+          averageTransactionValue: 0,
+          completedTransactions: 0,
+          pendingTransactions: 0
+        },
+        pagination: {
+          current: parseInt(page),
+          pages: Math.ceil(total / limit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get transactions with usage error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * GET /sales/receipt - Show receipts and receipts in refund process
+ */
+const getReceiptsWithRefunds = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { page = 1, limit = 20 } = req.query;
+
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Get all receipts
+    const receipts = await Receipt.find({ pharmacyId: pharmacyObjectId })
+      .sort({ receiptDate: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .select('receiptNumber receiptDate transactionId customerInfo totalAmount items')
+      .lean();
+
+    // Get receipts that are in refund process
+    const receiptsInRefundProcess = await Refund.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId,
+          status: { $in: ['pending', 'approved'] }
+        }
+      },
+      {
+        $lookup: {
+          from: 'receipts',
+          localField: 'receiptId',
+          foreignField: '_id',
+          as: 'receipt'
+        }
+      },
+      { $unwind: '$receipt' },
+      {
+        $project: {
+          receiptNumber: '$receipt.receiptNumber',
+          receiptDate: '$receipt.receiptDate',
+          transactionNumber: '$transactionNumber',
+          refundNumber: '$refundNumber',
+          refundStatus: '$status',
+          refundAmount: '$refundAmount',
+          refundReason: '$refundReason',
+          customerName: '$receipt.customerInfo.name',
+          totalAmount: '$receipt.totalAmount'
+        }
+      },
+      { $sort: { receiptDate: -1 } }
+    ]);
+
+    // Get receipt statistics
+    const receiptStats = await Receipt.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalReceipts: { $sum: 1 },
+          totalReceiptAmount: { $sum: '$totalAmount' },
+          averageReceiptValue: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    const totalReceipts = await Receipt.countDocuments({ pharmacyId: pharmacyObjectId });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        allReceipts: receipts.map(receipt => ({
+          receiptId: receipt._id,
+          receiptNumber: receipt.receiptNumber,
+          transactionId: receipt.transactionId,
+          receiptDate: receipt.receiptDate,
+          totalAmount: receipt.totalAmount,
+          customerName: receipt.customerInfo?.name || 'N/A',
+          itemsCount: receipt.items?.length || 0
+        })),
+        receiptsInRefundProcess: receiptsInRefundProcess,
+        statistics: receiptStats[0] || {
+          totalReceipts: 0,
+          totalReceiptAmount: 0,
+          averageReceiptValue: 0
+        },
+        summary: {
+          totalReceipts: totalReceipts,
+          inRefundProcess: receiptsInRefundProcess.length,
+          refundRate: totalReceipts > 0 ? 
+            (receiptsInRefundProcess.length / totalReceipts * 100).toFixed(1) + '%' : '0%'
+        },
+        pagination: {
+          current: parseInt(page),
+          pages: Math.ceil(totalReceipts / limit),
+          total: totalReceipts
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get receipts with refunds error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching receipts',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * GET /sales/medicine - Show medicines and the most wanted
+ */
+const getMedicinesWithPopularity = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { limit = 20 } = req.query;
+
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Get all medicines
+    const medicines = await Medicine.find({ pharmacyId: pharmacyObjectId })
+      .select('name _id quantity price costPrice')
+      .lean();
+
+    // Get sales data to calculate popularity
+    const salesData = await Sale.aggregate([
+      {
+        $match: {
+          pharmacyId: pharmacyObjectId,
+          status: { $in: ['completed', 'partially_refunded'] }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: '$items.medicineId',
+          medicineName: { $first: '$items.medicineName' },
+          totalQuantitySold: { $sum: '$items.quantity' },
+          totalRevenue: { $sum: '$items.totalPrice' },
+          saleCount: { $sum: 1 }
+        }
+      },
+      { $sort: { totalQuantitySold: -1 } },
+      { $limit: parseInt(limit) }
+    ]);
+
+    // Create a map of sales data for quick lookup
+    const salesMap = new Map();
+    salesData.forEach(item => {
+      salesMap.set(item._id.toString(), item);
+    });
+
+    // Combine medicine data with popularity
+    const medicinesWithPopularity = medicines.map(medicine => {
+      const salesInfo = salesMap.get(medicine._id.toString());
+      return {
+        medicineId: medicine._id,
+        medicineName: medicine.name,
+        currentQuantity: medicine.quantity,
+        price: medicine.price,
+        costPrice: medicine.costPrice,
+        popularity: salesInfo ? {
+          totalSold: salesInfo.totalQuantitySold,
+          totalRevenue: salesInfo.totalRevenue,
+          saleCount: salesInfo.saleCount,
+          rank: salesData.findIndex(item => item._id.toString() === medicine._id.toString()) + 1
+        } : {
+          totalSold: 0,
+          totalRevenue: 0,
+          saleCount: 0,
+          rank: null
+        }
+      };
+    });
+
+    // Sort by popularity (most wanted first)
+    medicinesWithPopularity.sort((a, b) => {
+      const aSold = a.popularity.totalSold;
+      const bSold = b.popularity.totalSold;
+      return bSold - aSold;
+    });
+
+    // Get top 10 most wanted medicines
+    const mostWanted = medicinesWithPopularity.slice(0, 10);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        allMedicines: medicinesWithPopularity,
+        mostWanted: mostWanted,
+        summary: {
+          totalMedicines: medicines.length,
+          topSelling: mostWanted.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get medicines with popularity error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching medicines',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * GET /sales/purchases - Show only what was purchased
+ */
+const getPurchases = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { page = 1, limit = 20, medicineName } = req.query;
+
+    const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
+
+    let matchStage = { pharmacyId: pharmacyObjectId };
+    
+    // Filter by medicine name if provided
+    if (medicineName) {
+      matchStage['items.medicineName'] = { $regex: medicineName, $options: 'i' };
+    }
+
+    const purchases = await Sale.aggregate([
+      { $match: matchStage },
+      { $unwind: '$items' },
+      {
+        $project: {
+          transactionNumber: 1,
+          receiptNumber: 1,
+          transactionDate: 1,
+          medicineId: '$items.medicineId',
+          medicineName: '$items.medicineName',
+          quantity: '$items.quantity',
+          unitPrice: '$items.unitPrice',
+          totalPrice: '$items.totalPrice',
+          batchNumber: '$items.batchNumber',
+          expiryDate: '$items.expiryDate'
+        }
+      },
+      { $sort: { transactionDate: -1 } },
+      { $skip: (page - 1) * limit },
+      { $limit: parseInt(limit) }
+    ]);
+
+    const total = await Sale.aggregate([
+      { $match: matchStage },
+      { $unwind: '$items' },
+      { $count: 'total' }
+    ]);
+
+    const totalCount = total[0]?.total || 0;
+
+    // Get purchase summary
+    const purchaseSummary = await Sale.aggregate([
+      { $match: { pharmacyId: pharmacyObjectId } },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: null,
+          totalItemsPurchased: { $sum: '$items.quantity' },
+          totalPurchaseValue: { $sum: '$items.totalPrice' },
+          uniqueMedicines: { $addToSet: '$items.medicineId' }
+        }
+      },
+      {
+        $project: {
+          totalItemsPurchased: 1,
+          totalPurchaseValue: 1,
+          uniqueMedicinesCount: { $size: '$uniqueMedicines' }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        purchases: purchases,
+        summary: purchaseSummary[0] || {
+          totalItemsPurchased: 0,
+          totalPurchaseValue: 0,
+          uniqueMedicinesCount: 0
+        },
+        pagination: {
+          current: parseInt(page),
+          pages: Math.ceil(totalCount / limit),
+          total: totalCount
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get purchases error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching purchases',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Helper function to get date filter based on period
+ */
+function getDateFilter(period) {
+  const now = new Date();
+  let startDate;
+
+  switch (period) {
+    case 'today':
+      startDate = new Date(now.setHours(0, 0, 0, 0));
+      break;
+    case 'week':
+      startDate = new Date(now.setDate(now.getDate() - 7));
+      break;
+    case 'month':
+      startDate = new Date(now.setMonth(now.getMonth() - 1));
+      break;
+    case 'year':
+      startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+      break;
+    case 'all':
+    default:
+      return null;
+  }
+
+  return {
+    $gte: startDate,
+    $lte: new Date()
+  };
+}
+
+module.exports = {
+  getAllSalesData,           
+  getSalesAnalysis,          
+  getTransactionsWithUsage,  
+  getReceiptsWithRefunds,    
+  getMedicinesWithPopularity, 
+  getPurchases               
+};

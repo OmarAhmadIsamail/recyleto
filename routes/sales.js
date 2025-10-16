@@ -1,15 +1,24 @@
-// routes/sales.js
 const express = require('express');
 const router = express.Router();
 const salesController = require('../controllers/salesController');
-const { authenticate } = require('../middleware/auth'); 
+const { protect } = require('../middleware/auth');
 
-// Sales dashboard and transactions
-router.get('/transactions', authenticate, salesController.getSalesTransactions);
-router.get('/statistics', authenticate, salesController.getSaleStatistics);
+// GET /sales - Show all medicines, transactions, receipts, and purchases
+router.get('/', protect, salesController.getAllSalesData);
 
-// Sales processing
-router.post('/full-sale', authenticate, salesController.processFullSale);
-router.post('/per-medicine-sale', authenticate, salesController.processPerMedicineSale);
+// GET /sales/analysis - Show analysis of medicines, transactions, and refund requests
+router.get('/analysis', protect, salesController.getSalesAnalysis);
+
+// GET /sales/transaction - Show transactions and the most used ones
+router.get('/transaction', protect, salesController.getTransactionsWithUsage);
+
+// GET /sales/receipt - Show receipts and receipts in refund process
+router.get('/receipt', protect, salesController.getReceiptsWithRefunds);
+
+// GET /sales/medicine - Show medicines and the most wanted
+router.get('/medicine', protect, salesController.getMedicinesWithPopularity);
+
+// GET /sales/purchases - Show only what was purchased
+router.get('/purchases', protect, salesController.getPurchases);
 
 module.exports = router;

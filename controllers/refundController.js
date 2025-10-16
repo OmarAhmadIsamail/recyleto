@@ -2,6 +2,7 @@ const Refund = require('../models/Refund');
 const Receipt = require('../models/Receipt');
 const Transaction = require('../models/Transaction');
 const Medicine = require('../models/Medicine');
+const { syncRefundToSales } = require('../services/salesService');
 
 /**
  * Create a refund request
@@ -342,6 +343,9 @@ const approveRefund = async (req, res) => {
 
     console.log('✅ Refund approved:', refund.refundNumber);
 
+    // Sync refund data to sales
+    await syncRefundToSales(refund._id);
+
     res.status(200).json({
       success: true,
       message: 'Refund approved successfully',
@@ -435,6 +439,9 @@ const completeRefund = async (req, res) => {
     await refund.save();
 
     console.log('💰 Refund completed:', refund.refundNumber);
+
+    // Sync refund data to sales
+    await syncRefundToSales(refund._id);
 
     res.status(200).json({
       success: true,

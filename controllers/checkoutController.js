@@ -3,9 +3,10 @@ const Cart = require('../models/Cart');
 const Medicine = require('../models/Medicine');
 const User = require('../models/User');
 const DeliveryAddress = require('../models/DeliveryAddress');
-const Receipt = require('../models/Receipt'); // Add this line
+const Receipt = require('../models/Receipt');
 const { generateReceipt } = require('../utils/receiptGenerator');
 const { sendEmail, isEmailConfigured, transporter } = require('../utils/mailer');
+const { syncTransactionToSales } = require('../services/salesService'); // Add this line
 
 /**
  * Process checkout with payment method and generate receipt
@@ -214,6 +215,9 @@ exports.processCheckout = async (req, res) => {
     cart.customerPhone = customerPhone || cart.customerPhone;
     cart.customerEmail = customerEmail || cart.customerEmail;
     await cart.save();
+
+    // ✅ SYNC TRANSACTION TO SALES - Add this line
+    await syncTransactionToSales(transaction._id);
 
     // Generate receipt PDF/HTML
     const receiptDocument = await generateReceipt({
@@ -510,6 +514,7 @@ async function handleReceiptEmail(customerEmail, transaction, receiptDocument, c
     };
   }
 }
+
 /**
  * Calculate delivery fee based on order amount and address
  */
