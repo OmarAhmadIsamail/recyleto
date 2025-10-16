@@ -14,16 +14,16 @@ const transactionRoutes = require('./routes/transaction');
 const checkoutRoutes = require('./routes/checkout');
 const profileRoutes = require('./routes/profile');
 const marketRoutes = require('./routes/market');
-const refundRoutes = require('./routes/refund');
+const refundRoutes = require('./routes/refund'); // Make sure this file exists
 const requestRoutes = require('./routes/request');
 const supportRoutes = require('./routes/support');
 const businessSettingsRoutes = require('./routes/businessSettings');
 const analyticsRoutes = require('./routes/analytics');
-const paymentMethodRoutes = require('./routes/paymentMethod');
 const deliveryRoutes = require('./routes/delivery');
 const salesRoutes = require('./routes/sales');
 const marketplaceRoutes = require('./routes/marketplace');
 const cartRoutes = require('./routes/cart');
+const receiptsRoutes = require('./routes/receipts');
 
 // Middleware
 const { handleMulterError } = require('./middleware/upload');
@@ -38,7 +38,9 @@ const createUploadsDirectories = () => {
         'uploads/requests',
         'uploads/deliveries',
         'uploads/sales',
-        'uploads/marketplace'
+        'uploads/marketplace',
+        'uploads/receipts',
+        'uploads/refunds' // Add refunds directory
     ];
 
     directories.forEach(dir => {
@@ -85,16 +87,16 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/checkout', checkoutRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/market', marketRoutes);
-app.use('/api/refunds', refundRoutes);
+app.use('/api/refunds', refundRoutes); // Use the imported refundRoutes
 app.use('/api/requests', requestRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/settings/business', businessSettingsRoutes);
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/payment-methods', paymentMethodRoutes);
 app.use('/api/delivery', deliveryRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/receipts', receiptsRoutes);
 
 // Multer error handling
 app.use(handleMulterError);
@@ -132,14 +134,14 @@ app.listen(PORT, () => {
     console.log(`- /api/checkout`);
     console.log(`- /api/profile`);
     console.log(`- /api/market`);
-    console.log(`- /api/refunds`);
+    console.log(`- /api/refunds`); // Added refunds
     console.log(`- /api/requests`);
     console.log(`- /api/support`);
     console.log(`- /api/settings/business`);
     console.log(`- /api/analytics`);
-    console.log(`- /api/payment-methods`);
     console.log(`- /api/delivery`);
     console.log(`- /api/sales`);
     console.log(`- /api/marketplace`);
     console.log(`- /api/cart`);
+    console.log(`- /api/receipts`);
 });

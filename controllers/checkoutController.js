@@ -3,6 +3,7 @@ const Cart = require('../models/Cart');
 const Medicine = require('../models/Medicine');
 const User = require('../models/User');
 const DeliveryAddress = require('../models/DeliveryAddress');
+const Receipt = require('../models/Receipt'); // Add this line
 const { generateReceipt } = require('../utils/receiptGenerator');
 const { sendEmail, isEmailConfigured, transporter } = require('../utils/mailer');
 
@@ -11,6 +12,7 @@ const { sendEmail, isEmailConfigured, transporter } = require('../utils/mailer')
  */
 exports.processCheckout = async (req, res) => {
   let emailSent = false;
+  let receipt = null;
   
   try {
     const {
@@ -191,6 +193,10 @@ exports.processCheckout = async (req, res) => {
 
     await transaction.save();
 
+    // ✅ CREATE RECEIPT
+    receipt = await createReceipt(transaction, cart, paymentResult);
+    console.log('🧾 Receipt created:', receipt.receiptNumber);
+
     // Update stock for sale transactions
     if (cart.transactionType === 'sale') {
       for (const item of cart.items) {
@@ -209,8 +215,8 @@ exports.processCheckout = async (req, res) => {
     cart.customerEmail = customerEmail || cart.customerEmail;
     await cart.save();
 
-    // Generate receipt
-    const receiptData = {
+    // Generate receipt PDF/HTML
+    const receiptDocument = await generateReceipt({
       transaction: {
         ...transaction.toObject(),
         pharmacyInfo: pharmacy,
@@ -232,25 +238,26 @@ exports.processCheckout = async (req, res) => {
         option: deliveryOption,
         fee: deliveryFee,
         estimatedDelivery: estimatedDelivery
-      }
-    };
+      },
+      receipt: receipt // Include receipt data
+    });
 
-    const receipt = await generateReceipt(receiptData);
-
-    // Send email receipt if customer email provided - using updated mailer system
+    // Send email receipt if customer email provided
     const emailResult = await handleReceiptEmail(
       customerEmail || cart.customerEmail, 
       transaction, 
-      receipt, 
+      receiptDocument, 
       cart,
       pharmacy,
-      deliveryAddress
+      deliveryAddress,
+      receipt // Pass receipt to email
     );
 
     emailSent = emailResult.success;
 
     console.log('✅ Checkout completed successfully:', {
       transactionNumber: transaction.transactionNumber,
+      receiptNumber: receipt.receiptNumber,
       amount: transaction.totalAmount,
       paymentMethod,
       deliveryOption,
@@ -272,8 +279,9 @@ exports.processCheckout = async (req, res) => {
       data: {
         transaction,
         receipt: {
-          html: receipt.html,
-          text: receipt.text,
+          receiptNumber: receipt.receiptNumber,
+          html: receiptDocument.html,
+          text: receiptDocument.text,
           transactionNumber: transaction.transactionNumber,
           totalAmount: transaction.totalAmount
         },
@@ -313,9 +321,60 @@ exports.processCheckout = async (req, res) => {
 };
 
 /**
- * Handle sending receipt email with proper error handling and connection management
+ * Create receipt for completed transaction
  */
-async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pharmacy, deliveryAddress) {
+async function createReceipt(transaction, cart, paymentResult) {
+  try {
+    const receiptNumber = await Receipt.generateReceiptNumber();
+    
+    const receiptData = {
+      receiptNumber,
+      transactionId: transaction._id,
+      transactionNumber: transaction.transactionNumber,
+      pharmacyId: transaction.pharmacyId,
+      userId: transaction.userId,
+      items: cart.items.map(item => ({
+        medicineId: item.medicineId,
+        medicineName: item.medicineName,
+        genericName: item.genericName,
+        form: item.form,
+        packSize: item.packSize,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        totalPrice: item.totalPrice,
+        batchNumber: item.batchNumber,
+        expiryDate: item.expiryDate,
+        manufacturer: item.manufacturer
+      })),
+      subtotal: transaction.subtotal,
+      tax: transaction.tax,
+      discount: transaction.discount,
+      deliveryFee: transaction.deliveryFee,
+      totalAmount: transaction.totalAmount,
+      payment: {
+        method: transaction.payment.method,
+        amount: transaction.payment.amount,
+        status: transaction.payment.status,
+        transactionId: paymentResult.transactionId
+      },
+      customerInfo: transaction.customerInfo,
+      receiptDate: transaction.checkoutDate
+    };
+
+    const receipt = new Receipt(receiptData);
+    await receipt.save();
+    
+    return receipt;
+  } catch (error) {
+    console.error('❌ Error creating receipt:', error);
+    throw new Error('Failed to create receipt');
+  }
+}
+
+/**
+ * Handle sending receipt email with receipt information
+ */
+async function handleReceiptEmail(customerEmail, transaction, receiptDocument, cart, pharmacy, deliveryAddress, receipt) {
   if (!customerEmail) {
     return { 
       success: false, 
@@ -335,8 +394,11 @@ async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pha
   }
 
   try {
-    // Prepare comprehensive email data with all required fields for the template
+    // Prepare comprehensive email data with receipt information
     const emailData = {
+      // Receipt details
+      receiptNumber: receipt.receiptNumber,
+      
       // Transaction details
       transactionNumber: transaction.transactionNumber,
       transactionDate: transaction.checkoutDate ? new Date(transaction.checkoutDate).toLocaleDateString() : new Date().toLocaleDateString(),
@@ -358,11 +420,11 @@ async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pha
       customerPhone: transaction.customerInfo?.phone,
       customerEmail: transaction.customerInfo?.email,
       
-      // Items
-      items: cart.items.map(item => ({
-        medicineName: item.medicineId?.name || item.medicineName,
+      // Items from receipt
+      items: receipt.items.map(item => ({
+        medicineName: item.medicineName,
         quantity: item.quantity,
-        unitPrice: item.price,
+        unitPrice: item.unitPrice,
         totalPrice: item.totalPrice
       })),
       
@@ -389,18 +451,19 @@ async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pha
       
       // Dates
       checkoutDate: transaction.checkoutDate,
+      receiptDate: receipt.receiptDate,
       currentDate: new Date().toLocaleDateString(),
       currentTime: new Date().toLocaleTimeString(),
       
       // Receipt content
-      receiptHtml: receipt.html,
-      receiptText: receipt.text
+      receiptHtml: receiptDocument.html,
+      receiptText: receiptDocument.text
     };
 
     // Set timeout for email sending to prevent hanging
     const emailPromise = sendEmail({
       to: customerEmail,
-      subject: `Receipt for Order #${transaction.transactionNumber}`,
+      subject: `Receipt #${receipt.receiptNumber} for Order #${transaction.transactionNumber}`,
       template: 'receipt',
       data: emailData
     });
@@ -424,9 +487,8 @@ async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pha
       };
     } else if (emailResult.timeout) {
       console.log('⏰ Email sending timed out, but may have been delivered');
-      // Even if timeout, the email might have been sent - check logs
       return {
-        success: true, // Mark as success since email was likely sent
+        success: true,
         message: 'Email sent (timeout occurred but delivery likely succeeded)',
         timeout: true,
         likelyDelivered: true
@@ -448,7 +510,6 @@ async function handleReceiptEmail(customerEmail, transaction, receipt, cart, pha
     };
   }
 }
-
 /**
  * Calculate delivery fee based on order amount and address
  */

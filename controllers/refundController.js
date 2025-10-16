@@ -1,247 +1,463 @@
-const mongoose = require('mongoose');
-const Transaction = require('../models/Transaction');
 const Refund = require('../models/Refund');
+const Receipt = require('../models/Receipt');
+const Transaction = require('../models/Transaction');
 const Medicine = require('../models/Medicine');
-const { validationResult } = require('express-validator');
-const mailer = require('../utils/mailer');
 
-const refundController = {
-  // Get transactions eligible for refund
-  getRefundEligibleTransactions: async (req, res) => {
-    try {
-      const pharmacyId = req.user.pharmacyId || req.user._id;
+/**
+ * Create a refund request
+ */
+const createRefund = async (req, res) => {
+  try {
+    const { receiptNumber, refundReason, refundItems, notes } = req.body;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id;
 
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    console.log('🔄 Creating refund for receipt:', receiptNumber);
 
-      const transactions = await Transaction.find({
-        pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-        createdAt: { $gte: thirtyDaysAgo },
-        status: { $in: ['completed', 'partially_refunded'] }
-      })
-        .select('transactionRef totalAmount createdAt items')
-        .sort({ createdAt: -1 })
-        .limit(50);
-
-      res.json({ success: true, transactions });
-    } catch (error) {
-      console.error('Get refund eligible transactions error:', error);
-      res.status(500).json({
+    // Validate required fields
+    if (!receiptNumber || !refundReason) {
+      return res.status(400).json({
         success: false,
-        message: 'Server error while fetching transactions'
+        message: 'Receipt number and refund reason are required'
       });
     }
-  },
 
-  // Request refund
-  requestRefund: async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
+    // Find receipt with transaction details
+    const receipt = await Receipt.findOne({
+      receiptNumber,
+      pharmacyId
+    }).populate('transactionId');
 
-      const { transactionReference, reason, items } = req.body;
-      const userId = req.user._id;
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-
-      console.log('Refund request:', { transactionReference, reason, items, userId, pharmacyId });
-
-      // Convert pharmacyId to ObjectId safely
-      const pharmacyObjectId = new mongoose.Types.ObjectId(pharmacyId);
-
-      // Find transaction
-      const transaction = await Transaction.findOne({
-        transactionRef: transactionReference,
-        pharmacyId: pharmacyObjectId
+    if (!receipt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Receipt not found'
       });
+    }
 
-      if (!transaction) {
-        console.log('Transaction not found in DB');
-        return res.status(404).json({
-          success: false,
-          message: 'Transaction not found'
-        });
-      }
+    console.log('📋 Found receipt:', receipt.receiptNumber);
 
-      if (!['completed', 'partially_refunded'].includes(transaction.status)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Transaction is not eligible for refund'
-        });
-      }
+    // Check if receipt is eligible for refund (within 30 days)
+    const receiptDate = new Date(receipt.receiptDate);
+    const daysSincePurchase = Math.floor((new Date() - receiptDate) / (1000 * 60 * 60 * 24));
+    
+    if (daysSincePurchase > 30) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refund period has expired (30 days from purchase)'
+      });
+    }
 
-      let refundAmount = 0;
-      let refundItems = [];
+    // Check for existing pending refund for this receipt
+    const existingRefund = await Refund.findOne({
+      receiptId: receipt._id,
+      status: { $in: ['pending', 'approved'] }
+    });
 
-      if (items?.length) {
-        // Partial refund
-        for (const item of items) {
-          const transactionItem = transaction.items.find(
-            ti => ti.medicineId.toString() === item.medicineId
-          );
+    if (existingRefund) {
+      return res.status(400).json({
+        success: false,
+        message: `There is already a ${existingRefund.status} refund for this receipt (${existingRefund.refundNumber})`
+      });
+    }
 
-          if (!transactionItem) {
-            return res.status(400).json({
-              success: false,
-              message: `Item not found in transaction: ${item.medicineId}`
-            });
-          }
+    let refundItemsData = [];
+    let refundType = 'full';
 
-          // Already refunded quantity
-          const totalRefundedQty = transaction.refunds.reduce((sum, r) => {
-            const refundedItem = r.items.find(i => i.medicineId.toString() === item.medicineId);
-            return refundedItem ? sum + refundedItem.quantity : sum;
-          }, 0);
+    // If specific items are provided for partial refund
+    if (refundItems && refundItems.length > 0) {
+      refundType = 'partial';
+      
+      for (const refundItem of refundItems) {
+        const originalItem = receipt.items.find(item => 
+          item.medicineId.toString() === refundItem.medicineId
+        );
 
-          const availableQty = transactionItem.quantity - totalRefundedQty;
-          if (item.quantity > availableQty) {
-            return res.status(400).json({
-              success: false,
-              message: `Refund quantity exceeds remaining quantity for item: ${transactionItem.medicineName}`
-            });
-          }
-
-          const itemTotal = item.quantity * transactionItem.unitPrice;
-          refundAmount += itemTotal;
-          refundItems.push({
-            medicineId: new mongoose.Types.ObjectId(item.medicineId),
-            name: transactionItem.medicineName,
-            quantity: item.quantity,
-            price: transactionItem.unitPrice,
-            total: itemTotal
+        if (!originalItem) {
+          return res.status(400).json({
+            success: false,
+            message: `Item not found in receipt: ${refundItem.medicineId}`
           });
         }
-      } else {
-        // Full refund
-        refundItems = transaction.items.map(item => {
-          const totalRefundedQty = transaction.refunds.reduce((sum, r) => {
-            const refundedItem = r.items.find(i => i.medicineId.toString() === item.medicineId.toString());
-            return refundedItem ? sum + refundedItem.quantity : sum;
-          }, 0);
 
-          const remainingQty = item.quantity - totalRefundedQty;
-          return {
-            medicineId: new mongoose.Types.ObjectId(item.medicineId),
-            name: item.medicineName,
-            quantity: remainingQty,
-            price: item.unitPrice,
-            total: remainingQty * item.unitPrice
-          };
-        });
-
-        refundAmount = refundItems.reduce((sum, i) => sum + i.total, 0);
-      }
-
-      // Create refund record
-      const refund = new Refund({
-        transactionId: transaction._id,
-        reference: `REF-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        reason,
-        amount: refundAmount,
-        items: refundItems,
-        processedBy: userId,
-        status: 'pending'
-      });
-
-      await refund.save();
-
-      // Update transaction
-      const allItemsRefunded = transaction.items.every(item => {
-        const refundedQty = transaction.refunds.reduce((sum, r) => {
-          const refundedItem = r.items.find(i => i.medicineId.toString() === item.medicineId.toString());
-          return refundedItem ? sum + refundedItem.quantity : sum;
-        }, 0) + (refundItems.find(i => i.medicineId.toString() === item.medicineId.toString())?.quantity || 0);
-
-        return refundedQty >= item.quantity;
-      });
-
-      transaction.status = allItemsRefunded ? 'refunded' : 'partially_refunded';
-      transaction.refunds.push({
-        refundId: refund._id,
-        amount: refundAmount,
-        date: new Date(),
-        reason
-      });
-      await transaction.save();
-
-      // Restock medicines
-      for (const item of refundItems) {
-        await Medicine.findByIdAndUpdate(item.medicineId, { $inc: { quantity: item.quantity } });
-      }
-
-      // Send email
-      try {
-        await mailer.sendRefundConfirmation(req.user.email, {
-          reference: refund.reference,
-          transactionReference: transaction.transactionRef,
-          amount: refundAmount,
-          reason,
-          status: 'pending',
-          createdAt: new Date(),
-          items: refundItems
-        });
-      } catch (emailError) {
-        console.error('Failed to send refund confirmation email:', emailError);
-      }
-
-      res.status(201).json({
-        success: true,
-        message: 'Refund request submitted successfully',
-        refund: {
-          id: refund._id,
-          reference: refund.reference,
-          amount: refund.amount,
-          status: refund.status
+        if (refundItem.quantity > originalItem.quantity) {
+          return res.status(400).json({
+            success: false,
+            message: `Refund quantity (${refundItem.quantity}) exceeds purchased quantity (${originalItem.quantity}) for ${originalItem.medicineName}`
+          });
         }
-      });
 
-    } catch (error) {
-      console.error('Request refund error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error while processing refund',
-        error: error.message
-      });
+        refundItemsData.push({
+          medicineId: originalItem.medicineId,
+          medicineName: originalItem.medicineName,
+          originalQuantity: originalItem.quantity,
+          refundQuantity: refundItem.quantity,
+          unitPrice: originalItem.unitPrice,
+          totalRefundAmount: refundItem.quantity * originalItem.unitPrice,
+          batchNumber: originalItem.batchNumber,
+          expiryDate: originalItem.expiryDate
+        });
+      }
+    } else {
+      // Full refund - all items
+      refundItemsData = receipt.items.map(item => ({
+        medicineId: item.medicineId,
+        medicineName: item.medicineName,
+        originalQuantity: item.quantity,
+        refundQuantity: item.quantity,
+        unitPrice: item.unitPrice,
+        totalRefundAmount: item.quantity * item.unitPrice,
+        batchNumber: item.batchNumber,
+        expiryDate: item.expiryDate
+      }));
     }
-  },
 
-  getRefundHistory: async (req, res) => {
-    try {
-      const pharmacyId = req.user.pharmacyId || req.user._id;
-      const { page = 1, limit = 10 } = req.query;
+    // Calculate refund amount
+    const refundAmount = refundItemsData.reduce((total, item) => total + item.totalRefundAmount, 0);
 
-      const refunds = await Refund.find({})
-        .populate({
-          path: 'transactionId',
-          match: { pharmacyId: new mongoose.Types.ObjectId(pharmacyId) },
-          select: 'transactionRef totalAmount'
-        })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .skip((page - 1) * limit);
+    // Generate refund number
+    const refundNumber = await Refund.generateRefundNumber();
 
-      const filteredRefunds = refunds.filter(r => r.transactionId);
-      const total = await Refund.countDocuments({});
+    // Create refund
+    const refund = new Refund({
+      refundNumber,
+      receiptId: receipt._id,
+      receiptNumber: receipt.receiptNumber,
+      transactionId: receipt.transactionId._id,
+      transactionNumber: receipt.transactionId.transactionNumber,
+      pharmacyId,
+      userId,
+      customerInfo: receipt.customerInfo,
+      refundItems: refundItemsData,
+      originalAmount: receipt.totalAmount,
+      refundAmount,
+      refundReason,
+      refundType,
+      paymentMethod: 'original_method', // Default to original payment method
+      status: 'pending',
+      notes
+    });
 
-      res.json({
-        success: true,
-        refunds: filteredRefunds,
-        totalPages: Math.ceil(total / limit),
-        currentPage: Number(page)
-      });
-    } catch (error) {
-      console.error('Get refund history error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error while fetching refund history'
-      });
-    }
+    await refund.save();
+
+    console.log('✅ Refund created:', refundNumber);
+
+    // Populate the refund for response
+    const populatedRefund = await Refund.findById(refund._id)
+      .populate('receiptId', 'receiptNumber receiptDate')
+      .populate('transactionId', 'transactionNumber checkoutDate');
+
+    res.status(201).json({
+      success: true,
+      message: 'Refund request created successfully',
+      data: {
+        refund: populatedRefund,
+        summary: {
+          refundAmount,
+          refundType,
+          itemsCount: refundItemsData.length,
+          daysSincePurchase
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Create refund error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating refund request',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
-module.exports = refundController;
+/**
+ * Get all refunds for pharmacy
+ */
+const getRefunds = async (req, res) => {
+  try {
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const { page = 1, limit = 10, status, startDate, endDate } = req.query;
+
+    const query = { pharmacyId };
+    
+    // Status filter
+    if (status) {
+      query.status = status;
+    }
+    
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    const refunds = await Refund.find(query)
+      .populate('receiptId', 'receiptNumber receiptDate')
+      .populate('transactionId', 'transactionNumber checkoutDate')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .lean();
+
+    const total = await Refund.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        refunds,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get refunds error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching refunds',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get refund by ID
+ */
+const getRefundById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+
+    const refund = await Refund.findOne({
+      _id: id,
+      pharmacyId
+    })
+    .populate('receiptId')
+    .populate('transactionId')
+    .populate('approvedBy', 'name email')
+    .lean();
+
+    if (!refund) {
+      return res.status(404).json({
+        success: false,
+        message: 'Refund not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: { refund }
+    });
+  } catch (error) {
+    console.error('Get refund by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching refund',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get refund by refund number
+ */
+const getRefundByNumber = async (req, res) => {
+  try {
+    const { refundNumber } = req.params;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+
+    const refund = await Refund.findOne({
+      refundNumber,
+      pharmacyId
+    })
+    .populate('receiptId')
+    .populate('transactionId')
+    .populate('approvedBy', 'name email')
+    .lean();
+
+    if (!refund) {
+      return res.status(404).json({
+        success: false,
+        message: 'Refund not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: { refund }
+    });
+  } catch (error) {
+    console.error('Get refund by number error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching refund',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Approve refund
+ */
+const approveRefund = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { paymentMethod, notes } = req.body;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+    const userId = req.user._id;
+
+    const refund = await Refund.findOne({
+      _id: id,
+      pharmacyId,
+      status: 'pending'
+    }).populate('receiptId').populate('transactionId');
+
+    if (!refund) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pending refund not found'
+      });
+    }
+
+    // Update stock for refunded items
+    for (const item of refund.refundItems) {
+      await Medicine.findByIdAndUpdate(
+        item.medicineId,
+        { $inc: { quantity: item.refundQuantity } }
+      );
+    }
+
+    // Update refund status
+    refund.status = 'approved';
+    refund.approvedBy = userId;
+    refund.approvedAt = new Date();
+    refund.paymentMethod = paymentMethod || refund.paymentMethod;
+    if (notes) refund.notes = notes;
+
+    await refund.save();
+
+    console.log('✅ Refund approved:', refund.refundNumber);
+
+    res.status(200).json({
+      success: true,
+      message: 'Refund approved successfully',
+      data: { refund }
+    });
+
+  } catch (error) {
+    console.error('Approve refund error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error approving refund',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Reject refund
+ */
+const rejectRefund = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejectionReason } = req.body;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+
+    if (!rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required'
+      });
+    }
+
+    const refund = await Refund.findOne({
+      _id: id,
+      pharmacyId,
+      status: 'pending'
+    });
+
+    if (!refund) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pending refund not found'
+      });
+    }
+
+    refund.status = 'rejected';
+    refund.rejectionReason = rejectionReason;
+    await refund.save();
+
+    console.log('❌ Refund rejected:', refund.refundNumber);
+
+    res.status(200).json({
+      success: true,
+      message: 'Refund rejected successfully',
+      data: { refund }
+    });
+
+  } catch (error) {
+    console.error('Reject refund error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rejecting refund',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Complete refund (mark as paid)
+ */
+const completeRefund = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pharmacyId = req.user.pharmacyId || req.user._id;
+
+    const refund = await Refund.findOne({
+      _id: id,
+      pharmacyId,
+      status: 'approved'
+    });
+
+    if (!refund) {
+      return res.status(404).json({
+        success: false,
+        message: 'Approved refund not found'
+      });
+    }
+
+    refund.status = 'completed';
+    refund.completedAt = new Date();
+    await refund.save();
+
+    console.log('💰 Refund completed:', refund.refundNumber);
+
+    res.status(200).json({
+      success: true,
+      message: 'Refund marked as completed',
+      data: { refund }
+    });
+
+  } catch (error) {
+    console.error('Complete refund error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error completing refund',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+module.exports = {
+  createRefund,
+  getRefunds,
+  getRefundById,
+  getRefundByNumber,
+  approveRefund,
+  rejectRefund,
+  completeRefund
+};

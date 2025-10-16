@@ -54,7 +54,7 @@ const transactionItemSchema = new mongoose.Schema({
     }
 }, { 
     timestamps: true,
-    _id: true // Keep _id for individual item operations
+    _id: true
 });
 
 const transactionSchema = new mongoose.Schema({
@@ -157,7 +157,7 @@ const transactionSchema = new mongoose.Schema({
             default: 'cash'
         },
         details: {
-            type: mongoose.Schema.Types.Mixed // Flexible for different payment methods
+            type: mongoose.Schema.Types.Mixed
         },
         amount: {
             type: Number,
@@ -240,25 +240,46 @@ const transactionSchema = new mongoose.Schema({
 
 }, { 
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toJSON: { 
+        virtuals: true,
+        transform: function(doc, ret) {
+            // Ensure items array exists for virtuals
+            if (!ret.items) {
+                ret.items = [];
+            }
+            return ret;
+        }
+    },
+    toObject: { 
+        virtuals: true,
+        transform: function(doc, ret) {
+            // Ensure items array exists for virtuals
+            if (!ret.items) {
+                ret.items = [];
+            }
+            return ret;
+        }
+    }
 });
 
 // ===== VIRTUAL FIELDS =====
 transactionSchema.virtual('itemCount').get(function() {
-    return this.items.length;
+    return Array.isArray(this.items) ? this.items.length : 0;
 });
 
 transactionSchema.virtual('totalQuantity').get(function() {
-    return this.items.reduce((total, item) => total + item.quantity, 0);
+    if (!Array.isArray(this.items)) return 0;
+    return this.items.reduce((total, item) => total + (item.quantity || 0), 0);
 });
 
 transactionSchema.virtual('isPaid').get(function() {
-    return this.payment.status === 'completed';
+    return this.payment && this.payment.status === 'completed';
 });
 
 transactionSchema.virtual('amountDue').get(function() {
-    return Math.max(0, this.totalAmount - this.payment.amount);
+    const total = this.totalAmount || 0;
+    const paid = (this.payment && this.payment.amount) || 0;
+    return Math.max(0, total - paid);
 });
 
 transactionSchema.virtual('ageInHours').get(function() {
@@ -314,21 +335,33 @@ transactionSchema.statics.getDailySales = async function(pharmacyId, date = new 
 
 // ===== INSTANCE METHODS =====
 transactionSchema.methods.calculateTotals = function() {
+    // Ensure items array exists
+    if (!Array.isArray(this.items)) {
+        this.items = [];
+    }
+    
     // Calculate item totals
     this.items.forEach(item => {
-        item.totalPrice = item.quantity * item.unitPrice;
+        if (item && typeof item.quantity === 'number' && typeof item.unitPrice === 'number') {
+            item.totalPrice = item.quantity * item.unitPrice;
+        }
     });
     
     // Calculate subtotal
-    this.subtotal = this.items.reduce((total, item) => total + item.totalPrice, 0);
+    this.subtotal = this.items.reduce((total, item) => {
+        return total + (item.totalPrice || 0);
+    }, 0);
     
     // Calculate total amount
-    let discountAmount = this.discount;
+    let discountAmount = this.discount || 0;
     if (this.discountType === 'percentage') {
-        discountAmount = (this.subtotal * this.discount) / 100;
+        discountAmount = (this.subtotal * (this.discount || 0)) / 100;
     }
     
-    this.totalAmount = Math.max(0, this.subtotal + this.tax - discountAmount + this.deliveryFee);
+    const taxAmount = this.tax || 0;
+    const deliveryFee = this.deliveryFee || 0;
+    
+    this.totalAmount = Math.max(0, this.subtotal + taxAmount - discountAmount + deliveryFee);
     
     // Sync payment amount
     if (this.payment) {
@@ -340,8 +373,9 @@ transactionSchema.methods.calculateTotals = function() {
 
 transactionSchema.methods.canCheckout = function() {
     return this.status === 'pending' && 
+           Array.isArray(this.items) && 
            this.items.length > 0 && 
-           this.totalAmount > 0;
+           (this.totalAmount || 0) > 0;
 };
 
 transactionSchema.methods.completeCheckout = function(paymentData = {}) {
@@ -367,8 +401,13 @@ transactionSchema.methods.completeCheckout = function(paymentData = {}) {
 };
 
 transactionSchema.methods.addItem = function(itemData) {
+    // Ensure items array exists
+    if (!Array.isArray(this.items)) {
+        this.items = [];
+    }
+    
     const existingItemIndex = this.items.findIndex(
-        item => item.medicineId.toString() === itemData.medicineId.toString()
+        item => item && item.medicineId && item.medicineId.toString() === itemData.medicineId.toString()
     );
 
     if (existingItemIndex >= 0) {
@@ -390,17 +429,21 @@ transactionSchema.methods.addItem = function(itemData) {
 };
 
 transactionSchema.methods.removeItem = function(itemId) {
-    this.items = this.items.filter(item => item._id.toString() !== itemId);
-    this.calculateTotals();
+    if (Array.isArray(this.items)) {
+        this.items = this.items.filter(item => item && item._id && item._id.toString() !== itemId);
+        this.calculateTotals();
+    }
     return this;
 };
 
 transactionSchema.methods.updateItemQuantity = function(itemId, quantity) {
-    const item = this.items.id(itemId);
-    if (item && quantity > 0) {
-        item.quantity = quantity;
-        item.totalPrice = quantity * item.unitPrice;
-        this.calculateTotals();
+    if (Array.isArray(this.items)) {
+        const item = this.items.id(itemId);
+        if (item && quantity > 0) {
+            item.quantity = quantity;
+            item.totalPrice = quantity * item.unitPrice;
+            this.calculateTotals();
+        }
     }
     return this;
 };
@@ -416,6 +459,11 @@ transactionSchema.pre('save', async function(next) {
             if (!this.transactionRef) {
                 this.transactionRef = `REF-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
             }
+        }
+        
+        // Ensure items array exists
+        if (!Array.isArray(this.items)) {
+            this.items = [];
         }
         
         // Calculate totals before saving
@@ -441,7 +489,7 @@ transactionSchema.pre('save', async function(next) {
 transactionSchema.pre('validate', function(next) {
     // Ensure payment amount matches total amount for completed transactions
     if (this.status === 'completed' && this.payment.status === 'completed') {
-        if (this.payment.amount < this.totalAmount) {
+        if ((this.payment.amount || 0) < (this.totalAmount || 0)) {
             this.invalidate('payment.amount', 'Payment amount must equal total amount for completed transactions');
         }
     }

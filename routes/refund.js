@@ -1,17 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const refundController = require('../controllers/refundController');
-const { refundValidator } = require('../validators/refundValidator');
-const { authenticate } = require('../middleware/auth');  
-const { validateResult } = require('../middleware/validateResult');
+const { protect } = require('../middleware/auth');
 
-// Get eligible transactions for refund
-router.get('/eligible-transactions', authenticate, refundController.getRefundEligibleTransactions);
+// Create refund request
+router.post('/', protect, refundController.createRefund);
 
-// Request refund
-router.post('/request', authenticate, refundValidator, validateResult, refundController.requestRefund);
+// Get all refunds
+router.get('/', protect, refundController.getRefunds);
 
-// Get refund history
-router.get('/history', authenticate, refundController.getRefundHistory);
+// Get refund by ID
+router.get('/:id', protect, refundController.getRefundById);
+
+// Get refund by number
+router.get('/number/:refundNumber', protect, refundController.getRefundByNumber);
+
+// Approve refund
+router.patch('/:id/approve', protect, refundController.approveRefund);
+
+// Reject refund
+router.patch('/:id/reject', protect, refundController.rejectRefund);
+
+// Complete refund
+router.patch('/:id/complete', protect, refundController.completeRefund);
 
 module.exports = router;
